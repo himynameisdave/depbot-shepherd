@@ -1,0 +1,31 @@
+{
+  "name": "depbot-shepherd",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A reusable GitHub Actions workflow that shepherds Dependabot PRs with Codex",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint --type-aware --deny-warnings",
+    "test": "bun test",
+    "validate": "bun run check && bun run lint && bun run format:check && bun test"
+  },
+  "devDependencies": {
+    "@himynameisdave/oxfmt-config": "1.0.0",
+    "@himynameisdave/oxlint-config": "1.2.0",
+    "@types/bun": "1.4.2",
+    "@types/node": "22.20.4",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
+    "oxlint-tsgolint": "7.0.2002",
+    "typescript": "7.0.2",
+    "yaml": "2.9.1"
+  },
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "packageManager": "bun@1.4.2"
+}

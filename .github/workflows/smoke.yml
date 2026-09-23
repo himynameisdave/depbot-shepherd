@@ -1,0 +1,25 @@
+name: Reusable workflow smoke test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  statuses: read
+  actions: read
+jobs:
+  # This repository has no Dependabot PRs on this branch. Exercise the actual
+  # cross-repository checkout and empty discovery path without spending API credits.
+  smoke:
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+      statuses: read
+      actions: read
+    uses: ./.github/workflows/shepherd.yml
+    with:
+      base-branch: shepherd-smoke-no-prs
+      dry-run: true
+    secrets:
+      OPENAI_API_KEY: unused-no-review-in-empty-smoke-test

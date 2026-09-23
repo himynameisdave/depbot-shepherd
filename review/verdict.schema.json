@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DependabotShepherdVerdict",
+  "type": "object",
+  "properties": {
+    "decision": { "type": "string", "enum": ["merge", "skip"] },
+    "risk": { "type": "string", "enum": ["low", "medium", "high"] },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+    "summary": { "type": "string" },
+    "findings": { "type": "array", "items": { "type": "string" } },
+    "checks_performed": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["decision", "risk", "confidence", "summary", "findings", "checks_performed"],
+  "additionalProperties": false
+}

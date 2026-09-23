@@ -1,0 +1,225 @@
+name: Dependabot shepherd
+
+on:
+  workflow_call:
+    inputs:
+      base-branch:
+        description: Target branch (blank uses the caller repository's default branch)
+        type: string
+        default: ''
+      dry-run:
+        description: Review and report without commenting, rebasing, or merging
+        type: boolean
+        default: true
+      pr:
+        description: Only process this PR number (blank processes all eligible PRs)
+        type: string
+        default: ''
+      max-auto-merge:
+        description: Highest permitted version bump (patch, minor, or major; unknown always skips)
+        type: string
+        default: minor
+      merge-method:
+        description: GitHub merge method (squash, merge, or rebase)
+        type: string
+        default: squash
+      skip-label:
+        description: Ignore PRs carrying this label
+        type: string
+        default: 'shepherd:skip'
+      rebase-wait-minutes:
+        description: Maximum wait for Dependabot to push after a rebase request
+        type: number
+        default: 10
+      ci-wait-minutes:
+        description: Maximum wait for checks to finish
+        type: number
+        default: 30
+      model:
+        description: Codex model (blank uses the CLI default)
+        type: string
+        default: ''
+      reasoning-effort:
+        description: Codex reasoning effort
+        type: string
+        default: high
+      codex-version:
+        description: Pinned Codex CLI and Responses proxy version
+        type: string
+        default: '0.156.1'
+      review-timeout-minutes:
+        description: Maximum duration of a Codex review step
+        type: number
+        default: 20
+      source-ref:
+        description: Implementation ref in depbot-shepherd; match the ref in jobs.<job>.uses
+        type: string
+        default: main
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used only by the Codex review action
+        required: true
+      SHEPHERD_GITHUB_TOKEN:
+        description: Optional PAT or App token so mutations trigger downstream workflows
+        required: false
+
+permissions: {}
+
+# A distinct prefix avoids colliding with the calling workflow's concurrency group.
+concurrency:
+  group: depbot-shepherd-worker-${{ github.repository }}-${{ inputs.base-branch || github.event.repository.default_branch }}
+  cancel-in-progress: false
+
+env:
+  GH_REPO: ${{ github.repository }}
+  BASE_BRANCH: ${{ inputs.base-branch || github.event.repository.default_branch }}
+  DRY_RUN: ${{ inputs.dry-run }}
+  TARGET_PR: ${{ inputs.pr }}
+  MAX_AUTO_MERGE: ${{ inputs.max-auto-merge }}
+  MERGE_METHOD: ${{ inputs.merge-method }}
+  SKIP_LABEL: ${{ inputs.skip-label }}
+  REBASE_WAIT_MINUTES: ${{ inputs.rebase-wait-minutes }}
+  CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
+  SHEPHERD_DIR: ${{ github.workspace }}/shepherd-state
+  PR_CHECKOUT: ${{ github.workspace }}/target
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      prs: ${{ steps.discover.outputs.prs }}
+      count: ${{ steps.discover.outputs.count }}
+      source-sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: himynameisdave/depbot-shepherd
+          ref: ${{ inputs.source-ref }}
+          path: shepherd
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+      - name: Lock implementation for this run
+        id: source
+        working-directory: shepherd
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Discover eligible PRs
+        id: discover
+        working-directory: shepherd
+        run: bun src/main.ts discover
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  shepherd:
+    name: 'PR #${{ matrix.pr }}'
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+      statuses: read
+    strategy:
+      # Only one PR can mutate the base at a time; each rechecks the latest base.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.discover.outputs.prs) }}
+    env:
+      PR: ${{ matrix.pr }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: himynameisdave/depbot-shepherd
+          ref: ${{ needs.discover.outputs.source-sha }}
+          path: shepherd
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+      - name: Rebase and wait for CI
+        id: sync
+        working-directory: shepherd
+        run: bun src/main.ts sync --pr "$PR"
+        env:
+          GH_TOKEN: ${{ secrets.SHEPHERD_GITHUB_TOKEN || github.token }}
+      - name: Check out the exact synchronized commit
+        if: steps.sync.outputs.status == 'ready'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.sync.outputs.head }}
+          path: target
+          persist-credentials: false
+      - name: Prepare review evidence
+        if: steps.sync.outputs.status == 'ready'
+        id: prepare
+        working-directory: shepherd
+        run: bun src/main.ts prepare --pr "$PR"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Review with Codex
+        if: steps.sync.outputs.status == 'ready'
+        timeout-minutes: ${{ inputs.review-timeout-minutes }}
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: ${{ steps.prepare.outputs.prompt }}
+          output-schema-file: ${{ github.workspace }}/shepherd/review/verdict.schema.json
+          output-file: ${{ steps.prepare.outputs.verdict }}
+          working-directory: ${{ github.workspace }}/target
+          codex-home: ${{ runner.temp }}/shepherd-codex
+          codex-version: ${{ inputs.codex-version }}
+          model: ${{ inputs.model }}
+          effort: ${{ inputs.reasoning-effort }}
+          sandbox: read-only
+          safety-strategy: drop-sudo
+      - name: Apply merge policy
+        if: steps.sync.outputs.status == 'ready'
+        working-directory: shepherd
+        run: bun src/main.ts decide --pr "$PR"
+        env:
+          GH_TOKEN: ${{ secrets.SHEPHERD_GITHUB_TOKEN || github.token }}
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: shepherd-result-${{ matrix.pr }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/shepherd-state/results/
+          retention-days: 7
+          if-no-files-found: warn
+
+  report:
+    needs: [discover, shepherd]
+    if: always() && needs.discover.result == 'success' && needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: himynameisdave/depbot-shepherd
+          ref: ${{ needs.discover.outputs.source-sha }}
+          path: shepherd
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: shepherd-result-*-${{ github.run_attempt }}
+          path: results
+          merge-multiple: true
+      - name: Summarize results and propagate failures
+        working-directory: shepherd
+        run: bun src/main.ts report --dir ../results
+        env:
+          EXPECTED_PRS: ${{ needs.discover.outputs.prs }}
+          SHEPHERD_JOB_RESULT: ${{ needs.shepherd.result }}
