@@ -1,22 +1,157 @@
 # 🐑 depbot-shepherd
 
-A reusable GitHub Actions workflow that reviews open Dependabot PRs with Codex and merges the ones that pass an explicit safety policy. Written in TypeScript and run with Bun.
+Let Dependabot open your dependency updates, then let Codex help review and merge them.
 
-The consuming repository owns the schedule. This repository owns discovery, rebase requests, review evidence, the Codex invocation, merge policy, and reporting. No scripts or dependencies need to be copied into your application.
+**depbot-shepherd checks your open Dependabot pull requests, waits for your tests to pass, and asks Codex to review the changes against your code.** Updates that pass its merge policy can be merged automatically. Anything that needs attention stays open for you.
 
-## Set it up
+You can use it in your own GitHub repository by adding one small YAML file and an OpenAI API key. You do not need to fork this project, install Bun, or add a package to your application.
 
-1. Add an `OPENAI_API_KEY` Actions secret in the repository you want to shepherd.
-2. Ensure Dependabot is configured and PRs run meaningful CI. Configure branch protection or a ruleset with required checks and **Require branches to be up to date before merging**. The workflow respects required reviews and other merge restrictions; it does not bypass them or approve PRs.
-3. Copy [examples/daily.yml](examples/daily.yml) into that repository as `.github/workflows/dependabot-shepherd.yml`.
-4. Run it manually first. Manual runs default to dry-run: inspect the Actions job summary before enabling unattended merges. The example's daily schedule enables real merges.
+- [Get started](#get-started): try it manually without changing any PRs.
+- [Run it every day](#run-it-every-day): enable scheduled reviews and merges.
+- [Common questions](#common-questions): skipped PRs, costs, and troubleshooting.
+- [Configuration reference](#configuration-reference): all available settings.
+- [Advanced setup](#advanced-setup): version pinning, tokens, and merge rules.
 
-Minimal manual caller:
+## How it fits together
+
+A **GitHub Actions workflow** is a YAML file in your repository's `.github/workflows/` folder. It tells GitHub what to run and when to run it.
+
+A **reusable workflow** is a workflow maintained in another repository. Your YAML file points to it with `uses:`. GitHub then runs it for **your repository**, using the settings and secrets you provide.
+
+With depbot-shepherd:
+
+1. **Dependabot** opens pull requests (PRs) to update your dependencies.
+2. **Your existing CI** runs tests and other checks on those PRs.
+3. **depbot-shepherd** brings eligible PRs up to date, asks Codex to review them, and merges only when its checks allow it.
+4. **You** review anything it skips and can exclude individual PRs whenever you want.
+
+It does not set up Dependabot or your tests for you, and it does not fix failing tests or make application code changes. Codex is the only supported reviewer today; Claude/Anthropic support is planned as a possible future addition.
+
+## Get started
+
+### 1. Check that your repository is ready
+
+You will need:
+
+- A GitHub repository where you can add workflow files and repository secrets. If you do not have access to repository settings, ask a maintainer to help.
+- GitHub Actions enabled for that repository.
+- Dependabot configured to open dependency update PRs. If you have not set it up yet, follow [GitHub's Dependabot setup guide](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-version-updates).
+- An existing workflow that runs tests or other meaningful checks on PRs. This is usually called **CI**, short for continuous integration. depbot-shepherd will not merge a PR with no successful checks.
+- An OpenAI API key with access to Codex. Reviews use your OpenAI API account and can incur charges, including during a dry run. This version does not accept a ChatGPT login or subscription credentials.
+
+The repository does not need to use TypeScript or Bun. Those are used to build depbot-shepherd itself.
+
+### 2. Add your OpenAI API key as a secret
+
+A **secret** lets a workflow use a credential without putting its value in your repository's files.
+
+In **your repository** on GitHub:
+
+1. Open **Settings → Secrets and variables → Actions**.
+2. Select **New repository secret**.
+3. Set the name to **`OPENAI_API_KEY`**.
+4. Paste your API key into the secret value and select **Add secret**.
+
+Keep the name exactly as shown. The YAML below refers to that name; you do not paste the key into the YAML. See [GitHub's secret instructions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets) if your settings look different.
+
+### 3. Add the workflow file
+
+In **your repository**, create this file:
+
+```text
+.github/workflows/dependabot-shepherd.yml
+```
+
+You can create it in your editor, or use **Add file → Create new file** on GitHub and enter the entire path above. Paste the following contents:
 
 ```yaml
 name: Dependabot shepherd
+
+# Adds a "Run workflow" button in GitHub's Actions tab.
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+  actions: read
+
+jobs:
+  shepherd:
+    uses: himynameisdave/depbot-shepherd/.github/workflows/shepherd.yml@main
+    with:
+      dry-run: true
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+**Copy this as-is.** Keep `himynameisdave/depbot-shepherd` in the `uses:` line: it points to this project's shared workflow. GitHub automatically supplies your repository as the target.
+
+Commit the file to your repository's **default branch** (usually `main`), or open a PR and merge it there. The manual run button will not appear until the workflow is on the default branch.
+
+What the main sections mean:
+
+| Section              | What it does                                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `on`                 | Chooses when to run. This first example runs only when you click the button.                                           |
+| `permissions`        | Allows the workflow to read PR checks, report results, and later merge updates. Keep these entries even for a dry run. |
+| `jobs.shepherd.uses` | Calls the workflow maintained in this repository.                                                                      |
+| `with`               | Supplies settings. `dry-run: true` prevents comments, rebase requests, and merges.                                     |
+| `secrets`            | Passes the API key you saved in step 2 to the reviewer.                                                                |
+
+Unlike an individual Action, a reusable workflow goes directly under a job. You do not wrap this `uses:` line in `steps:`.
+
+### 4. Try a dry run
+
+1. Open your repository's **Actions** tab.
+2. Select **Dependabot shepherd** in the left sidebar.
+3. Select **Run workflow**, choose your default branch, and confirm **Run workflow**.
+4. Open the new run. When it finishes, look at its job summaries. For runs with eligible PRs, open the **report** job for the combined results.
+
+A **dry run** lets you see what would happen without changing any PRs. It can still call Codex and use API credits. PRs that need a rebase are skipped because a dry run cannot request one.
+
+Expect one of these results:
+
+| Result                               | Meaning                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| **Would merge**                      | The PR passed review and policy, but dry-run mode prevented the merge.                     |
+| **Skipped**                          | The PR needs attention or is not ready. Read the reason in the summary.                    |
+| **Error**                            | A step failed, such as authentication or the review. Open the failed job's logs.           |
+| **No open Dependabot pull requests** | There were no eligible PRs for this run. Discovery completed; there was nothing to review. |
+
+### 5. Prepare for automatic merging
+
+Before turning off dry-run mode, configure branch protection or a ruleset for your target branch with **required status checks** and **Require branches to be up to date before merging**. These make GitHub enforce your CI requirements at merge time. See [GitHub's branch protection guide](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
+
+The default merge method is **squash**: GitHub combines a PR's changes into one commit. Make sure **Allow squash merging** is enabled under your repository's **Settings → General → Pull Requests**, or choose another `merge-method` below.
+
+For a manual run that may merge, change this line in your workflow, commit it, and run the workflow again:
+
+```yaml
+dry-run: false
+```
+
+The workflow respects required human approvals and other repository restrictions. It does not grant approvals or bypass protection rules. To keep a particular PR out of automation, create and apply the **`shepherd:skip`** label to it.
+
+## Run it every day
+
+Once you are happy with the dry-run results, replace your workflow file with the following. It runs daily at **09:17 UTC** and also keeps the manual run button.
+
+**Scheduled runs may merge PRs.** Manual runs default to dry-run mode; clear the dry-run checkbox when you want a manual run to make changes.
+
+```yaml
+name: Daily Dependabot shepherd
+on:
+  schedule:
+    - cron: '17 9 * * *' # Daily at 09:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Review only, without comments, rebases, or merges
+        type: boolean
+        default: true
 permissions:
   contents: write
   pull-requests: write
@@ -27,40 +162,68 @@ jobs:
   shepherd:
     uses: himynameisdave/depbot-shepherd/.github/workflows/shepherd.yml@main
     with:
-      dry-run: true
+      # Scheduled runs merge; manual runs default to dry-run.
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+      max-auto-merge: minor
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # Optional: makes merges trigger downstream workflows.
+      # SHEPHERD_GITHUB_TOKEN: ${{ secrets.SHEPHERD_GITHUB_TOKEN }}
 ```
 
-This is a **reusable workflow**, so `uses` belongs directly under a job, not inside `steps`. A caller cannot add its own steps to that job. GitHub schedules run from the caller's default branch and interpret cron in UTC; `base-branch` selects which branch's Dependabot PRs to process.
+This complete example is also available in [examples/daily.yml](examples/daily.yml).
 
-While this project is being developed, `@main` tracks the current implementation. For an immutable deployment, use the same full commit SHA in both places:
+The `cron` expression sets the schedule, in UTC. GitHub may delay scheduled runs, so treat this as a daily maintenance task rather than an exact appointment. The file must remain on your default branch even if you configure the workflow to review PRs targeting another branch.
+
+To stop scheduled runs, remove the `schedule:` entry or disable the workflow from its Actions page. To keep the schedule but stop changes to PRs, replace the `dry-run:` expression under `with:` with `true`.
+
+## Common questions
+
+### Can I use this with a private repository?
+
+Yes, provided your repository or organization allows the referenced GitHub Actions and reusable workflow. You supply your own API key. Codex reviews repository content through OpenAI, so use it only where that is appropriate for your project.
+
+### Does this cost anything?
+
+Codex reviews use your OpenAI API account. GitHub Actions usage is also subject to your GitHub plan. A dry run can still incur review costs; a run with no eligible PRs does not call Codex.
+
+### Why did it skip my PR?
+
+Read the summary for the specific reason. Common causes are failing or pending checks, a branch that needs updating, a required human approval, a major version update, or a review that could not establish enough confidence.
+
+By default, patch updates such as `1.2.3 → 1.2.4` and minor updates such as `1.2.3 → 1.3.0` may merge. Major updates such as `1.2.3 → 2.0.0` stay open. Passing tests alone is not sufficient: the review and the other merge checks must also pass.
+
+Drafts, PRs with the skip label, PRs from other authors, and PRs targeting other branches are excluded. It is normal for a run to merge nothing.
+
+### Why can't I see the Run workflow button?
+
+Check that the file is in `.github/workflows/`, contains `workflow_dispatch:`, and has been committed to your default branch. Also check that Actions is enabled and that you have permission to run workflows. GitHub has a [manual-run walkthrough](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow) with screenshots.
+
+### Why does the run fail before it reviews anything?
+
+Check that `OPENAI_API_KEY` is an **Actions repository secret** in your repository and that you copied all the `permissions` entries. If GitHub says an Action or reusable workflow is not allowed, a repository or organization administrator may need to update the Actions policy.
+
+### Why didn't my deployment or post-merge CI run?
+
+GitHub provides the workflow with a built-in `GITHUB_TOKEN`. Merges made using that token generally do not trigger other workflows. If merging should start a deployment or another workflow, configure the optional [GitHub token](#triggering-other-workflows-after-a-merge).
+
+### Can I choose a branch or review just one PR?
+
+Yes. Add settings under the existing `with:` section, for example:
 
 ```yaml
-jobs:
-  shepherd:
-    uses: himynameisdave/depbot-shepherd/.github/workflows/shepherd.yml@<full-commit-sha>
-    with:
-      source-ref: <full-commit-sha>
-      dry-run: false
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+with:
+  dry-run: true
+  base-branch: release
+  pr: '123'
+  max-auto-merge: patch
 ```
 
-`source-ref` is necessary because a reusable workflow's normal checkout would fetch the **caller** repository. We explicitly fetch this repository's implementation, resolve its commit once, and use that exact commit in every job. There is no npm publishing or Marketplace registration step.
+This reviews only PR #123 if it is an eligible Dependabot PR targeting `release`. Remove `pr` when you want to process all eligible PRs again. Settings under `with:` apply to every run, including scheduled runs.
 
-## What a run does
+## Configuration reference
 
-1. Find open, non-draft Dependabot PRs targeting the selected branch, excluding the skip label. Queue the oldest PR numbers first and process at most one at a time. GitHub controls matrix scheduling, so exact execution order is not guaranteed.
-2. Compare each PR with the current base. Ask Dependabot to rebase if behind, or recreate if conflicting, then wait for a new head and green CI. Dependabot's push triggers its usual PR workflows.
-3. Check out that exact head without persisted credentials. Collect the PR diff, embedded release notes, CI results, and best-effort upstream GitHub comparisons.
-4. Run Codex through the official `openai/codex-action` in a read-only sandbox using its `drop-sudo` protection and API proxy. Codex inspects repository usage and returns structured JSON. It does not install dependencies, run repository scripts, fix code, or merge anything.
-5. Re-fetch the PR, compare head and base, and apply the deterministic policy. Only merge if the PR is still eligible, CI is green, the branch is clean and current, the version bump is permitted, and the review accepts it. The GitHub merge API checks the reviewed head SHA atomically.
-6. Leave one verdict comment per head SHA, and publish results in the Actions summary and short-lived JSON artifacts. Pre-review skips (such as failed CI) appear in the summary. Failed review jobs and missing artifacts make the report fail.
-
-CI failures, breaking changes, and ambiguous updates stay open for a human. This version does not repair failed builds or edit dependency PRs.
-
-## Inputs
+All settings go under `jobs.shepherd.with` in **your** workflow file. You only need to include settings you want to change.
 
 | Input                    | Default               | Purpose                                                                                                                     |
 | ------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -80,22 +243,59 @@ CI failures, breaking changes, and ambiguous updates stay open for a human. This
 
 Each PR job has a 90-minute overall timeout, including setup, rebase, CI, review, and reporting. Keep configured waits within that budget. Discovery supports up to GitHub's 256-job matrix limit and fails visibly above it; use `pr` to narrow the run.
 
-## Tokens and permissions
+## Advanced setup
 
-`OPENAI_API_KEY` is required for review and is passed only to the official Codex Action. This first version supports API-key authentication, not a copied ChatGPT `auth.json` or token-refresh writeback.
+### Choosing a fixed version
 
-By default, GitHub operations use the caller's `GITHUB_TOKEN`. Merges made with that token generally **do not trigger downstream workflows**. If post-merge CI, deployment, or other event-driven automation must run, supply `SHEPHERD_GITHUB_TOKEN` using a GitHub App installation token or a fine-grained PAT scoped to the consuming repository:
+The getting-started examples use `@main`, which follows ongoing changes to this project. To keep using a fixed version until you explicitly upgrade, choose a full commit SHA from [this repository's commit history](https://github.com/himynameisdave/depbot-shepherd/commits/main) and use it in **both** places below.
+
+This is a replacement for the `jobs:` section in the getting-started example; keep that example's `on:` and `permissions:` sections. Replace both `<full-commit-sha>` placeholders with the same actual SHA:
+
+```yaml
+jobs:
+  shepherd:
+    uses: himynameisdave/depbot-shepherd/.github/workflows/shepherd.yml@<full-commit-sha>
+    with:
+      source-ref: <full-commit-sha>
+      dry-run: true
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+The ref after `@` selects the workflow definition. `source-ref` selects this repository's TypeScript implementation. The workflow resolves that implementation to one commit for all jobs in a run. Keep the two references aligned when upgrading.
+
+### Triggering other workflows after a merge
+
+You only need an additional GitHub token if you want mutations to trigger other workflows or your setup requires a separate identity. The default `GITHUB_TOKEN` is supplied automatically; you do not create it yourself.
+
+For the optional token, use a GitHub App installation token or a fine-grained personal access token (PAT) scoped to your repository with:
 
 - Contents: read/write.
 - Pull requests: read/write.
 - Checks and commit statuses: read.
 - Workflows: write if the PR changes workflow files and the token requires that permission.
 
-The reusable workflow also needs Actions read permission to download its result artifacts. A caller's permission ceiling must allow the job permissions declared above, even for a dry run. Organization action allowlists must permit this repository, the pinned GitHub Actions, Bun setup, and the official Codex Action.
+Save the token as an Actions repository secret named `SHEPHERD_GITHUB_TOKEN`, using the same process as for the API key. Then pass it alongside your API key:
 
-PR checkouts never persist credentials. GitHub tokens are passed only to deterministic CLI steps, and no caller dependencies or scripts execute in the privileged orchestration steps. Only same-repository PRs authored by Dependabot are eligible.
+```yaml
+secrets:
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  SHEPHERD_GITHUB_TOKEN: ${{ secrets.SHEPHERD_GITHUB_TOKEN }}
+```
 
-## Merge policy and limits
+A PAT expires according to its settings and must be replaced when necessary. GitHub App installation tokens are short-lived; an App-based setup should generate a fresh token before calling the reusable workflow.
+
+### How review and merging are separated
+
+The workflow asks Dependabot to rebase outdated PRs or recreate conflicting ones, then waits for CI on the new commit. It checks out the exact commit and gathers the PR diff, embedded release notes, check results, and best-effort upstream comparisons.
+
+Codex runs through the official `openai/codex-action` in a read-only sandbox with `drop-sudo` protection and an API proxy. It returns a structured verdict. Separate TypeScript code rechecks the PR and decides whether to ask GitHub to merge.
+
+The API key is passed only to the Codex Action. GitHub tokens are passed only to the orchestration steps. PR checkouts do not persist credentials, and those orchestration steps do not install or execute your repository's scripts.
+
+Eligible PRs are queued by oldest PR number and processed at most one at a time. GitHub controls matrix scheduling, so exact execution order is not guaranteed. Review comments are posted once per head commit; skips before review appear in the summary. Results are also saved as downloadable JSON artifacts for seven days.
+
+### Detailed merge policy
 
 The model can withhold a merge; it cannot override these checks:
 
