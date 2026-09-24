@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-/** Orchestration for the reusable workflow. Codex supplies a verdict; this CLI owns mutations. */
 import { spawnSync } from 'node:child_process';
+/** Orchestration for the reusable workflow. Codex supplies a verdict; this CLI owns mutations. */
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -12,6 +13,7 @@ import {
   formatUpdates,
   hasMarker,
   maxLevel,
+  levelAllowed,
   parseAutoMergeLevel,
   parseUpdates,
   parseVerdict,
@@ -423,6 +425,11 @@ async function sync(n: number): Promise<void> {
     return;
   }
 
+  if (!levelAllowed(maxLevel(updates), CEILING)) {
+    skip(`${maxLevel(updates)} bump is not allowed by MAX_AUTO_MERGE=${CEILING}; no model review needed`);
+    return;
+  }
+
   pr = await waitForMergeability(n, pr);
   const needsRecreate = pr.mergeable === 'CONFLICTING' || pr.mergeStateStatus === 'DIRTY';
   const needsRebase = pr.mergeStateStatus === 'BEHIND' || behindBase(pr, baseSha()) > 0;
@@ -472,6 +479,10 @@ async function sync(n: number): Promise<void> {
     return;
   }
   updates = parseUpdates(pr.title, pr.body);
+  if (!levelAllowed(maxLevel(updates), CEILING)) {
+    skip('update classification changed while waiting; no model review needed');
+    return;
+  }
   const state: State = { pr, baseSha: base, updates, level: maxLevel(updates), checks };
   writeJson(statePath(n), state);
   const head = pr.headRefOid.slice(0, 7);
@@ -590,9 +601,69 @@ function prepare(n: number): void {
     MAX_AUTO_MERGE: CEILING,
   });
   writeFileSync(join(dir, 'prompt.md'), prompt);
+  const model = envStr('REVIEW_MODEL', 'gpt-6-luna');
+  const effort = envStr('REVIEW_EFFORT', 'medium');
+  const fingerprint = createHash('sha256').update(
+    JSON.stringify({
+      repo: REPO,
+      state,
+      ceiling: CEILING,
+      model,
+      effort,
+      codexVersion: envStr('REVIEW_CODEX_VERSION', '0.156.1'),
+    }),
+  );
+  // Include the actual evidence so changed release notes or upstream diffs invalidate the cache.
+  for (const file of readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .toSorted()) {
+    fingerprint.update(file).update(readFileSync(file));
+  }
+  const reviewKey = fingerprint.digest('hex');
+  writeFileSync(join(prDir(n), 'review-key.txt'), reviewKey);
+  setOutput('review-key', reviewKey);
+  setOutput('skip-cache', join(prDir(n), 'skip-cache.json'));
+  log(`Review configuration: model=${model}, reasoning=${effort}`);
+  appendSummary(`- PR #${n} reviewer: **${model}**, reasoning **${effort}**\n`);
   setOutput('prompt', join(dir, 'prompt.md'));
   setOutput('verdict', join(prDir(n), 'verdict.json'));
   log(`review packet written to ${dir}`);
+}
+
+/** Cached data can only veto a merge, never authorize one. */
+function reuse(n: number): void {
+  const path = join(prDir(n), 'skip-cache.json');
+  if (envStr('FORCE_REVIEW', 'false') === 'true' || !existsSync(path)) {
+    setOutput('reused', 'false');
+    return;
+  }
+  let cached: unknown;
+  try {
+    cached = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    setOutput('reused', 'false');
+    return;
+  }
+  const key = readFileSync(join(prDir(n), 'review-key.txt'), 'utf8');
+  if (
+    typeof cached !== 'object'
+    || cached === null
+    || !('key' in cached)
+    || cached.key !== key
+    || !('verdict' in cached)
+  ) {
+    setOutput('reused', 'false');
+    return;
+  }
+  const verdict = parseVerdict(JSON.stringify(cached.verdict));
+  if (verdict?.decision !== 'skip') {
+    setOutput('reused', 'false');
+    return;
+  }
+  writeJson(join(prDir(n), 'verdict.json'), verdict);
+  setOutput('reused', 'true');
+  appendSummary(`- PR #${n}: reused a previous **skip** review; no model call.\n`);
 }
 
 // ─── decide ────────────────────────────────────────────────────────────────────────────────────
@@ -674,6 +745,14 @@ function decide(n: number): void {
   }
 
   if (!policy.merge) {
+    const keyPath = join(prDir(n), 'review-key.txt');
+    if (verdict.decision === 'skip' && existsSync(keyPath)) {
+      writeJson(join(prDir(n), 'skip-cache.json'), {
+        key: readFileSync(keyPath, 'utf8'),
+        verdict,
+      });
+      setOutput('cacheable', 'true');
+    }
     writeResult(resultFrom(fresh, state.updates, 'skipped', policy.reason, verdict));
     return;
   }
@@ -750,6 +829,10 @@ try {
       prepare(prNumberArg());
       break;
     }
+    case 'reuse': {
+      reuse(prNumberArg());
+      break;
+    }
     case 'decide': {
       decide(prNumberArg());
       break;
@@ -759,7 +842,7 @@ try {
       break;
     }
     default: {
-      fail(`unknown command "${command}" — one of: discover, sync, prepare, decide, report`);
+      fail(`unknown command "${command}" — one of: discover, sync, prepare, reuse, decide, report`);
     }
   }
 } catch (error) {

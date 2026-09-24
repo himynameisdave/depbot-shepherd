@@ -254,3 +254,71 @@ describe('workflow CLI against simulated GitHub', () => {
     expect(f.run('discover', { TARGET_PR: 'oops' }).status).toBe(1);
   });
 });
+
+describe('review cost controls', () => {
+  it.each(['Bump example from 1.0.0 to 2.0.0', 'Bump example from abc123 to def456'])(
+    'rejects %s before comparing or rebasing',
+    (title) => {
+      const f = fixture();
+      f.data.pr.title = title;
+      f.data.behind = 1;
+      f.save();
+      expect(f.run('sync').status).toBe(0);
+      expect(f.result().reason).toContain('no model review needed');
+      expect(f.calls()).toHaveLength(1);
+    },
+  );
+
+  it('reuses a matching skip verdict in dry run without allowing a merge', () => {
+    const f = fixture();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.run('prepare').status).toBe(0);
+    writeFileSync(join(f.state, 'pr-1/verdict.json'), JSON.stringify({ ...verdict, decision: 'skip' }));
+    expect(f.run('decide', { DRY_RUN: 'true' }).status).toBe(0);
+    rmSync(join(f.state, 'pr-1/verdict.json'));
+    expect(f.run('reuse').stdout).toContain('reused=true');
+    expect(f.run('decide', { DRY_RUN: 'true' }).status).toBe(0);
+    expect(f.result().outcome).toBe('skipped');
+    expect(f.calls().some((call) => call.args.includes('PUT') || call.args.includes('comment'))).toBe(false);
+  });
+
+  it.each(['merge', 'bad-key', 'invalid', 'force'])('ignores a %s cache entry', (mode) => {
+    const f = fixture();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.run('prepare').status).toBe(0);
+    const key = readFileSync(join(f.state, 'pr-1/review-key.txt'), 'utf8');
+    const cached = JSON.stringify({
+      key: mode === 'bad-key' ? 'wrong' : key,
+      verdict: { ...verdict, decision: mode === 'merge' ? 'merge' : 'skip' },
+    });
+    writeFileSync(join(f.state, 'pr-1/skip-cache.json'), mode === 'invalid' ? 'invalid JSON' : cached);
+    expect(f.run('reuse', { FORCE_REVIEW: String(mode === 'force') }).stdout).toContain('reused=false');
+    expect(existsSync(join(f.state, 'pr-1/verdict.json'))).toBe(false);
+  });
+
+  it('does not cache a merge verdict, even in dry run', () => {
+    const f = fixture();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.run('prepare').status).toBe(0);
+    f.review();
+    expect(f.run('decide', { DRY_RUN: 'true' }).status).toBe(0);
+    expect(existsSync(join(f.state, 'pr-1/skip-cache.json'))).toBe(false);
+  });
+
+  it('keeps keys stable across dry-run changes and invalidates on model and evidence changes', () => {
+    const f = fixture();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.run('prepare').status).toBe(0);
+    const key = () => readFileSync(join(f.state, 'pr-1/review-key.txt'), 'utf8');
+    const original = key();
+    expect(f.run('prepare', { DRY_RUN: 'true' }).status).toBe(0);
+    expect(key()).toBe(original);
+    expect(f.run('prepare', { REVIEW_MODEL: 'gpt-6-sol' }).status).toBe(0);
+    expect(key()).not.toBe(original);
+    f.data.pr.body = 'Updated release notes';
+    f.save();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.run('prepare').status).toBe(0);
+    expect(key()).not.toBe(original);
+  });
+});

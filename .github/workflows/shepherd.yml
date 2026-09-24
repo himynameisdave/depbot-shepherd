@@ -36,13 +36,17 @@ on:
         type: number
         default: 30
       model:
-        description: Codex model (blank uses the CLI default)
+        description: Review model (blank also uses gpt-6-luna)
         type: string
-        default: ''
+        default: gpt-6-luna
       reasoning-effort:
         description: Codex reasoning effort
         type: string
-        default: high
+        default: medium
+      force-review:
+        description: Ignore a cached skip verdict and pay for a fresh review
+        type: boolean
+        default: false
       codex-version:
         description: Pinned Codex CLI and Responses proxy version
         type: string
@@ -74,6 +78,10 @@ env:
   GH_REPO: ${{ github.repository }}
   BASE_BRANCH: ${{ inputs.base-branch || github.event.repository.default_branch }}
   DRY_RUN: ${{ inputs.dry-run }}
+  REVIEW_MODEL: ${{ inputs.model || 'gpt-6-luna' }}
+  REVIEW_EFFORT: ${{ inputs.reasoning-effort || 'medium' }}
+  REVIEW_CODEX_VERSION: ${{ inputs.codex-version }}
+  FORCE_REVIEW: ${{ inputs.force-review }}
   TARGET_PR: ${{ inputs.pr }}
   MAX_AUTO_MERGE: ${{ inputs.max-auto-merge }}
   MERGE_METHOD: ${{ inputs.merge-method }}
@@ -164,8 +172,21 @@ jobs:
         run: bun src/main.ts prepare --pr "$PR"
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Review with Codex
+      - name: Restore previous skip verdict
+        if: steps.sync.outputs.status == 'ready' && !inputs.force-review
+        id: cache
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.prepare.outputs.skip-cache }}
+          key: shepherd-skip-v1-${{ github.repository_id }}-${{ matrix.pr }}-${{ steps.prepare.outputs.review-key }}-${{ hashFiles('shepherd/src/*.ts', 'shepherd/review/*', 'shepherd/.github/workflows/shepherd.yml') }}
+      - name: Validate cached skip verdict
         if: steps.sync.outputs.status == 'ready'
+        id: reuse
+        working-directory: shepherd
+        run: bun src/main.ts reuse --pr "$PR"
+      - name: Review with Codex
+        if: steps.sync.outputs.status == 'ready' && steps.reuse.outputs.reused != 'true'
         timeout-minutes: ${{ inputs.review-timeout-minutes }}
         uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
         with:
@@ -176,16 +197,24 @@ jobs:
           working-directory: ${{ github.workspace }}/target
           codex-home: ${{ runner.temp }}/shepherd-codex
           codex-version: ${{ inputs.codex-version }}
-          model: ${{ inputs.model }}
-          effort: ${{ inputs.reasoning-effort }}
+          model: ${{ inputs.model || 'gpt-6-luna' }}
+          effort: ${{ inputs.reasoning-effort || 'medium' }}
           sandbox: read-only
           safety-strategy: drop-sudo
       - name: Apply merge policy
+        id: decide
         if: steps.sync.outputs.status == 'ready'
         working-directory: shepherd
         run: bun src/main.ts decide --pr "$PR"
         env:
           GH_TOKEN: ${{ secrets.SHEPHERD_GITHUB_TOKEN || github.token }}
+      - name: Save skip verdict for unchanged reviews
+        if: steps.decide.outputs.cacheable == 'true' && steps.cache.outputs.cache-hit != 'true' && !inputs.force-review
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.prepare.outputs.skip-cache }}
+          key: shepherd-skip-v1-${{ github.repository_id }}-${{ matrix.pr }}-${{ steps.prepare.outputs.review-key }}-${{ hashFiles('shepherd/src/*.ts', 'shepherd/review/*', 'shepherd/.github/workflows/shepherd.yml') }}
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

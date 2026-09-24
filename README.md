@@ -187,6 +187,26 @@ Yes, provided your repository or organization allows the referenced GitHub Actio
 
 Codex reviews use your OpenAI API account. GitHub Actions usage is also subject to your GitHub plan. A dry run can still incur review costs; a run with no eligible PRs does not call Codex.
 
+### How do I keep daily review costs down?
+
+The default is **`gpt-6-luna` with `medium` reasoning**, explicitly selected so a changing Codex default cannot silently select a more expensive model. The review configuration appears in the job summary.
+
+```yaml
+with:
+  dry-run: true
+  model: gpt-6-luna
+  reasoning-effort: medium
+  pr: '123' # Optional: evaluate one PR before reviewing a whole backlog.
+```
+
+Updates above `max-auto-merge`, or with unrecognized versions, skip before any model call. The reviewer is instructed to search narrowly and stop once it finds a reason to skip. There is no automatic escalation to a more expensive model.
+
+Completed **skip** reviews are cached, including during dry runs. A matching cached skip avoids another model call. Changing the PR head, base commit, description, collected evidence, model, reasoning effort, Codex version, policy, or review implementation invalidates it. GitHub may evict or restrict cache access, so reuse is best-effort. Cache failures fall back to a fresh review. Cache entries contain review text, not credentials; treat that text as repository data.
+
+Only negative decisions are reused: a cached verdict can **never authorize a merge**. A previous dry-run result of **Would merge** still requires a new review on the next run. To revisit an unchanged skipped PR, set `force-review: true` temporarily; reset it afterward. Forced reviews bypass both cache reads and writes, so they do not replace the stored skip. To replace a cached decision, delete the corresponding `shepherd-skip-v1-…` entry in GitHub's Actions caches before a normal run.
+
+Model choice and shorter reviews reduce costs but are not dollar or token caps. `review-timeout-minutes` limits elapsed time, not spend. Test a cheaper model on a small dry run to assess its judgments before enabling automatic merges. See [current OpenAI API prices](https://developers.openai.com/api/docs/pricing).
+
 ### Why did it skip my PR?
 
 Read the summary for the specific reason. Common causes are failing or pending checks, a branch that needs updating, a required human approval, a major version update, or a review that could not establish enough confidence.
@@ -235,8 +255,9 @@ All settings go under `jobs.shepherd.with` in **your** workflow file. You only n
 | `skip-label`             | `shepherd:skip`       | PR opt-out label; checked again after review.                                                                               |
 | `rebase-wait-minutes`    | `10`                  | Maximum wait for Dependabot's new commit.                                                                                   |
 | `ci-wait-minutes`        | `30`                  | Maximum wait for checks.                                                                                                    |
-| `model`                  | Empty                 | Use Codex's default model, or supply an available model ID.                                                                 |
-| `reasoning-effort`       | `high`                | Codex reasoning effort, supported by the chosen model.                                                                      |
+| `model`                  | `gpt-6-luna`          | Explicit review model; blank also selects Luna.                                                                             |
+| `reasoning-effort`       | `medium`              | Codex reasoning effort, supported by the chosen model.                                                                      |
+| `force-review`           | `false`               | Ignore a cached skip and pay for a new review. Leave false for routine daily runs.                                          |
 | `codex-version`          | `0.156.1`             | Version of Codex CLI and its API proxy.                                                                                     |
 | `review-timeout-minutes` | `20`                  | Maximum duration of the review action, including setup.                                                                     |
 | `source-ref`             | `main`                | Ref of this repository's implementation; match the workflow reference.                                                      |
@@ -319,7 +340,7 @@ bun run validate
 bun run format
 ```
 
-- `src/main.ts`: GitHub CLI orchestration (`discover`, `sync`, `prepare`, `decide`, `report`).
+- `src/main.ts`: GitHub CLI orchestration (`discover`, `sync`, `prepare`, `reuse`, `decide`, `report`).
 - `src/lib.ts`: version parsing, review contract, checks, policy, and rendering.
 - `review/prompt.md` and `review/verdict.schema.json`: reviewer instructions and JSON contract.
 - `.github/workflows/shepherd.yml`: public `workflow_call` entry point.

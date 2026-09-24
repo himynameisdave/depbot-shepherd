@@ -6,6 +6,8 @@ import { parse } from 'yaml';
 type Step = {
   readonly uses?: string;
   readonly run?: string;
+  readonly if?: string;
+  readonly id?: string;
   readonly with?: Readonly<Record<string, unknown>>;
   readonly env?: Readonly<Record<string, unknown>>;
 };
@@ -52,5 +54,26 @@ describe('reusable workflow contract', () => {
     expect(reviewer?.env?.GH_TOKEN).toBeUndefined();
     expect(reviewer?.with?.['output-schema-file']).toBeDefined();
     expect(reviewer?.with?.['openai-api-key']).toBeDefined();
+  });
+});
+
+describe('review cost defaults', () => {
+  it('pins a cheap default and prevents blank inputs from choosing an implicit model', () => {
+    const call = workflow.on.workflow_call as { inputs: Record<string, { default: unknown }> };
+    expect(call.inputs.model?.default).toBe('gpt-6-luna');
+    expect(call.inputs['reasoning-effort']?.default).toBe('medium');
+    const reviewer = workflow.jobs.shepherd?.steps?.find((step) => step.uses?.startsWith('openai/codex-action'));
+    expect(reviewer?.with?.model).toContain("|| 'gpt-6-luna'");
+    expect(reviewer?.if).toContain("steps.reuse.outputs.reused != 'true'");
+  });
+
+  it('only saves explicitly cacheable skips with exact cache keys', () => {
+    const steps = workflow.jobs.shepherd?.steps ?? [];
+    const save = steps.find((step) => step.uses?.startsWith('actions/cache/save'));
+    const restore = steps.find((step) => step.uses?.startsWith('actions/cache/restore'));
+    expect(save?.if).toContain("steps.decide.outputs.cacheable == 'true'");
+    expect(save?.with?.key).toBe(restore?.with?.key);
+    expect(restore?.with?.['restore-keys']).toBeUndefined();
+    expect(save?.with?.key).toContain('hashFiles');
   });
 });

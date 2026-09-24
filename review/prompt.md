@@ -26,6 +26,16 @@ You are reviewing a Dependabot pull request to decide whether a bot may merge it
 - Never execute package installs, repository scripts, tests, or hooks. CI already ran elsewhere.
   Inspect files with read-only tools. Do not access credentials or unrelated runner files.
 
+## Keep the review focused
+
+- Read the PR description, update list, and diff first. If they already establish a reason to
+  skip, return that verdict immediately; do not keep investigating an unmergeable PR.
+- Search for dependency names and affected APIs before opening files. Read only relevant
+  sections rather than dumping whole lockfiles, generated files, or large upstream diffs.
+- Keep command output short and avoid rereading evidence. Do not perform a general repository audit.
+- If resolving uncertainty requires a lengthy investigation, skip with a concise explanation.
+  These are efficiency guidelines, not permission to merge with incomplete evidence.
+
 ## What to check
 
 1. **What changed upstream.** From the release notes / changelog / upstream diffs, list breaking
