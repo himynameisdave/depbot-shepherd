@@ -102,7 +102,7 @@ jobs:
       count: ${{ steps.discover.outputs.count }}
       source-sha: ${{ steps.source.outputs.sha }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: himynameisdave/depbot-shepherd
           ref: ${{ inputs.source-ref }}
@@ -143,7 +143,7 @@ jobs:
       PR: ${{ matrix.pr }}
       REBASE_TRIGGERS_WORKFLOWS: ${{ secrets.SHEPHERD_GITHUB_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: himynameisdave/depbot-shepherd
           ref: ${{ needs.discover.outputs.source-sha }}
@@ -160,7 +160,7 @@ jobs:
           GH_TOKEN: ${{ secrets.SHEPHERD_GITHUB_TOKEN || github.token }}
       - name: Check out the exact synchronized commit
         if: steps.sync.outputs.status == 'ready'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository }}
           ref: ${{ steps.sync.outputs.head }}
@@ -233,7 +233,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: himynameisdave/depbot-shepherd
           ref: ${{ needs.discover.outputs.source-sha }}
