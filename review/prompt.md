@@ -10,9 +10,8 @@ You are reviewing a Dependabot pull request to decide whether a bot may merge it
 
 ## Your situation
 
-- Your working directory is a checkout of the PR head — the repository **with the bump applied** and
-  rebased on the latest base. CI (lint, typecheck, unit tests, e2e, build) is already green on it; you
-  are the review that CI cannot do.
+- Your working directory is a checkout of the PR head — the repository **with the bump applied**. It is rebased only when the base branch requires up-to-date checks.
+  Reported CI checks passed on this head; read ci.md to see which checks actually ran.
 - You are in a read-only sandbox with no network. Everything you need is on disk:
   - `{{CONTEXT_DIR}}/pr.md` — the PR body: Dependabot's release notes, changelog, and commit list.
   - `{{CONTEXT_DIR}}/pr.diff` — the PR's diff (manifest + lockfile, or workflow files for actions).

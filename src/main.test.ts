@@ -53,11 +53,17 @@ function fixture() {
   const data = {
     baseSha: 'base-sha',
     behind: 0,
+    classicStrict: true,
+    rulesetStrict: false,
+    protectionError: false,
+    rejectRebase: false,
+    rebasedChecks: null as { name: string; status: string; conclusion: string }[] | null,
     rebaseHead: '',
     rejectMerge: false,
     comments: '',
     pr: {
       number: 1,
+      id: 'PR_test',
       title: 'Bump example from 1.0.0 to 1.0.1',
       body: '',
       url: 'https://github.com/example/repo/pull/1',
@@ -144,13 +150,14 @@ describe('workflow CLI against simulated GitHub', () => {
     expect(f.calls().some((call) => call.args.includes('comment') || call.args.includes('PUT'))).toBe(false);
   });
 
-  it('requests Dependabot rebase even when GitHub says CLEAN but comparison says behind', () => {
+  it('rebases directly when classic protection requires an up-to-date branch', () => {
     const f = fixture();
     f.data.behind = 1;
     f.data.rebaseHead = 'rebased-sha';
     f.save();
     expect(f.run('sync').status).toBe(0);
-    expect(f.calls().some((call) => call.input.startsWith('@dependabot rebase'))).toBe(true);
+    expect(f.calls().some((call) => call.args.some((arg) => arg.includes('updateMethod:REBASE')))).toBe(true);
+    expect(f.calls().some((call) => call.args.includes('comment'))).toBe(false);
     expect(readFileSync(join(f.state, 'pr-1/state.json'), 'utf8')).toContain('rebased-sha');
   });
 
@@ -320,5 +327,103 @@ describe('review cost controls', () => {
     expect(f.run('sync').status).toBe(0);
     expect(f.run('prepare').status).toBe(0);
     expect(key()).not.toBe(original);
+  });
+});
+
+describe('direct rebasing and branch protection', () => {
+  it('allows a merely-behind branch when strict checks are disabled', () => {
+    const f = fixture();
+    f.data.classicStrict = false;
+    f.data.behind = 3;
+    f.save();
+    expect(f.run('sync').status).toBe(0);
+    f.review();
+    expect(f.run('decide', { DRY_RUN: 'true' }).status).toBe(0);
+    expect(f.result().outcome).toBe('would-merge');
+    expect(f.calls().some((call) => call.args.some((arg) => arg.includes('updatePullRequestBranch')))).toBe(false);
+  });
+
+  it('honors strict status checks from active rulesets and pins the rebase head', () => {
+    const f = fixture();
+    f.data.classicStrict = false;
+    f.data.rulesetStrict = true;
+    f.data.behind = 1;
+    f.data.rebaseHead = 'new-sha';
+    f.save();
+    expect(f.run('sync').status).toBe(0);
+    const mutation = f.calls().find((call) => call.args.some((arg) => arg.includes('updatePullRequestBranch')));
+    expect(mutation?.args).toContain(`head=${f.head}`);
+    expect(mutation?.args).toContain('id=PR_test');
+    expect(readFileSync(join(f.state, 'pr-1/state.json'), 'utf8')).toContain('new-sha');
+  });
+
+  it('never submits a direct rebase in dry run', () => {
+    const f = fixture();
+    f.data.behind = 1;
+    f.save();
+    expect(f.run('sync', { DRY_RUN: 'true' }).status).toBe(0);
+    expect(f.calls().some((call) => call.args.some((arg) => arg.includes('updatePullRequestBranch')))).toBe(false);
+    expect(f.result().reason).toContain('would rebase');
+  });
+
+  it('leaves conflicts for a human instead of recreating a dependency PR', () => {
+    const f = fixture();
+    f.data.pr.mergeable = 'CONFLICTING';
+    f.save();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.result().reason).toContain('conflicts');
+    expect(f.calls()).toHaveLength(1);
+  });
+
+  it('checks CI on the new head after rebasing', () => {
+    const f = fixture();
+    f.data.behind = 1;
+    f.data.rebaseHead = 'new-sha';
+    f.data.rebasedChecks = [{ name: 'CI', status: 'COMPLETED', conclusion: 'FAILURE' }];
+    f.save();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.result().headSha).toBe('new-sha');
+    expect(f.result().reason).toContain('CI failing');
+  });
+
+  it('reports that GITHUB_TOKEN rebases require CI without waiting on suppressed workflows', () => {
+    const f = fixture();
+    f.data.behind = 1;
+    f.data.rebaseHead = 'new-sha';
+    f.save();
+    expect(f.run('sync', { REBASE_TRIGGERS_WORKFLOWS: 'false' }).status).toBe(0);
+    expect(f.result().reason).toContain('SHEPHERD_GITHUB_TOKEN');
+    expect(f.result().outcome).toBe('skipped');
+  });
+
+  it.each(['protectionError', 'rejectRebase'] as const)('fails closed on %s', (flag) => {
+    const f = fixture();
+    f.data.behind = 1;
+    f.data[flag] = true;
+    f.save();
+    expect(f.run('sync').status).toBe(1);
+    expect(f.result().outcome).toBe('error');
+  });
+
+  it('stops if a rebase is accepted but does not produce a new head', () => {
+    const f = fixture();
+    f.data.behind = 1;
+    f.save();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.result().reason).toContain('did not produce a rebased head');
+  });
+
+  it('rechecks stricter protection added during review', () => {
+    const f = fixture();
+    f.data.classicStrict = false;
+    f.data.behind = 1;
+    f.save();
+    expect(f.run('sync').status).toBe(0);
+    f.review();
+    f.data.classicStrict = true;
+    f.save();
+    expect(f.run('decide').status).toBe(0);
+    expect(f.result().outcome).toBe('skipped');
+    expect(f.calls().some((call) => call.args.includes('PUT'))).toBe(false);
   });
 });

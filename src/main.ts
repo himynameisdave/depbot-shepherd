@@ -17,7 +17,6 @@ import {
   parseAutoMergeLevel,
   parseUpdates,
   parseVerdict,
-  rebaseMarker,
   renderReport,
   renderTemplate,
   renderVerdictComment,
@@ -180,6 +179,7 @@ type Label = { readonly name: string };
 
 type PrView = {
   readonly number: number;
+  readonly id: string;
   readonly title: string;
   readonly url: string;
   readonly body: string;
@@ -197,6 +197,7 @@ type PrView = {
 };
 
 const PR_FIELDS = [
+  'id',
   'number',
   'title',
   'url',
@@ -226,6 +227,77 @@ function baseSha(): string {
 function behindBase(pr: Readonly<PrView>, base: string): number {
   return ghJson<{ behind_by: number }>(['api', `repos/${REPO}/compare/${base}...${pr.headRefOid}`])
     .behind_by;
+}
+
+/** Read classic protection and active rulesets; errors must not silently disable protection. */
+function requiresUpToDate(): boolean {
+  const [owner, name] = REPO.split('/');
+  const response = ghJson<{
+    data: {
+      repository: {
+        ref: {
+          branchProtectionRule: {
+            requiresStrictStatusChecks: boolean;
+            requiresStatusChecks: boolean;
+          } | null;
+        } | null;
+      };
+    };
+  }>([
+    'api',
+    'graphql',
+    '-f',
+    'query=query($owner:String!,$name:String!,$ref:String!){repository(owner:$owner,name:$name){ref(qualifiedName:$ref){branchProtectionRule{requiresStrictStatusChecks requiresStatusChecks}}}}',
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `name=${name}`,
+    '-f',
+    `ref=refs/heads/${BASE_BRANCH}`,
+  ]);
+  const branch = response.data.repository.ref;
+  if (branch === null) {
+    fail('target branch not found while checking protection');
+  }
+  const classic = branch.branchProtectionRule;
+  if (classic?.requiresStatusChecks && classic.requiresStrictStatusChecks) {
+    return true;
+  }
+  const pages = ghJson<
+    {
+      type: string;
+      parameters?: {
+        strict_required_status_checks_policy?: boolean;
+        required_status_checks?: unknown[];
+      };
+    }[][]
+  >([
+    'api',
+    `repos/${REPO}/rules/branches/${encodeURIComponent(BASE_BRANCH)}?per_page=100`,
+    '--paginate',
+    '--slurp',
+  ]);
+  return pages
+    .flat()
+    .some(
+      (rule) =>
+        rule.type === 'required_status_checks'
+        && rule.parameters?.strict_required_status_checks_policy === true
+        && (rule.parameters.required_status_checks?.length ?? 0) > 0,
+    );
+}
+
+function rebasePr(pr: Readonly<PrView>): void {
+  gh([
+    'api',
+    'graphql',
+    '-f',
+    'query=mutation($id:ID!,$head:GitObjectID!){updatePullRequestBranch(input:{pullRequestId:$id,expectedHeadOid:$head,updateMethod:REBASE}){clientMutationId}}',
+    '-f',
+    `id=${pr.id}`,
+    '-f',
+    `head=${pr.headRefOid}`,
+  ]);
 }
 
 function commentBodies(n: number): string {
@@ -371,7 +443,7 @@ async function waitForHeadChange(n: number, before: string): Promise<PrView> {
   const deadline = Date.now() + REBASE_WAIT_MIN * 60 * 1000;
   let pr = viewPr(n);
   while (pr.headRefOid === before && Date.now() < deadline) {
-    log(`waiting for Dependabot to push a new head (was ${before.slice(0, 7)})…`);
+    log(`waiting for GitHub to finish rebasing the PR (was ${before.slice(0, 7)})…`);
     // oxlint-disable-next-line eslint/no-await-in-loop -- polling loop, sequential by design
     await sleep(POLL_SECONDS * 1000);
     pr = viewPr(n);
@@ -431,29 +503,31 @@ async function sync(n: number): Promise<void> {
   }
 
   pr = await waitForMergeability(n, pr);
-  const needsRecreate = pr.mergeable === 'CONFLICTING' || pr.mergeStateStatus === 'DIRTY';
-  const needsRebase = pr.mergeStateStatus === 'BEHIND' || behindBase(pr, baseSha()) > 0;
-  if (needsRecreate || needsRebase) {
-    const command = needsRecreate ? '@dependabot recreate' : '@dependabot rebase';
+  if (pr.mergeable === 'CONFLICTING' || pr.mergeStateStatus === 'DIRTY') {
+    skip('branch has conflicts; resolve them manually before retrying');
+    return;
+  }
+  const strict = requiresUpToDate();
+  const needsRebase = strict && behindBase(pr, baseSha()) > 0;
+  if (needsRebase) {
     if (DRY_RUN) {
-      skip(`would comment \`${command}\` (dry run)`);
+      skip('would rebase the PR directly because the base requires up-to-date checks (dry run)');
       return;
-    }
-    const marker = rebaseMarker(pr.headRefOid);
-    if (hasMarker([commentBodies(n)], marker)) {
-      log(`already asked Dependabot to ${needsRecreate ? 'recreate' : 'rebase'} this head; waiting`);
-    } else {
-      log(`commenting "${command}" (${pr.mergeStateStatus})`);
-      postComment(n, `${command}\n\n${marker}\n`);
     }
     const before = pr.headRefOid;
+    log(`rebasing PR #${n} directly through GitHub`);
+    rebasePr(pr);
     pr = await waitForHeadChange(n, before);
     if (pr.headRefOid === before) {
-      const verb = needsRecreate ? 'recreate' : 'rebase';
-      skip(`asked Dependabot to ${verb}; no new push within ${REBASE_WAIT_MIN} min — retry next run`);
+      skip(`GitHub did not produce a rebased head within ${REBASE_WAIT_MIN} min; retry next run`);
       return;
     }
-    log(`new head ${pr.headRefOid.slice(0, 7)}`);
+    if (envStr('REBASE_TRIGGERS_WORKFLOWS', 'true') !== 'true') {
+      skip(
+        'branch rebased with GITHUB_TOKEN; run CI on the new head or configure SHEPHERD_GITHUB_TOKEN for automatic CI triggering',
+      );
+      return;
+    }
     pr = await waitForMergeability(n, pr);
   }
 
@@ -474,7 +548,11 @@ async function sync(n: number): Promise<void> {
   }
 
   const base = baseSha();
-  if (behindBase(pr, base) > 0 || pr.mergeable !== 'MERGEABLE' || pr.mergeStateStatus !== 'CLEAN') {
+  if (
+    (strict && behindBase(pr, base) > 0)
+    || pr.mergeable !== 'MERGEABLE'
+    || pr.mergeStateStatus !== 'CLEAN'
+  ) {
     skip('branch is behind, blocked, or mergeability is not clean; retry next run');
     return;
   }
@@ -704,7 +782,7 @@ function decide(n: number): void {
   if (
     fresh.headRefOid !== state.pr.headRefOid
     || baseSha() !== state.baseSha
-    || behindBase(fresh, state.baseSha) > 0
+    || (requiresUpToDate() && behindBase(fresh, state.baseSha) > 0)
   ) {
     const reason = 'head or base changed during review — retry next run';
     writeResult(resultFrom(fresh, state.updates, 'skipped', reason, verdict));

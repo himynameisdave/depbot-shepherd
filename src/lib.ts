@@ -458,10 +458,6 @@ export function verdictMarker(headSha: string): string {
   return `<!-- dependabot-shepherd:verdict sha=${headSha} -->`;
 }
 
-export function rebaseMarker(headSha: string): string {
-  return `<!-- dependabot-shepherd:rebase sha=${headSha} -->`;
-}
-
 /** True when any comment body already carries the marker (so we don't spam on every daily run). */
 export function hasMarker(commentBodies: readonly string[], marker: string): boolean {
   return commentBodies.some((body) => body.includes(marker));

@@ -17,14 +17,52 @@ if (args[0] === 'pr' && args[1] === 'view') {
   output('diff --git a/package.json b/package.json\n-1.0.0\n+1.0.1\n');
 } else if (args[0] === 'pr' && args[1] === 'comment') {
   data.comments = `${data.comments ?? ''}\n${input}`;
-  if (input.startsWith('@dependabot') && data.rebaseHead) {
-    data.pr.headRefOid = data.rebaseHead;
-    data.pr.mergeStateStatus = 'CLEAN';
-    data.pr.mergeable = 'MERGEABLE';
-    data.behind = 0;
-  }
   writeFileSync(file, JSON.stringify(data));
   output('https://github.com/example/repo/pull/1#comment');
+} else if (args.includes('graphql') && args.some((arg) => arg.includes('updatePullRequestBranch'))) {
+  if (!args.includes(`head=${data.pr.headRefOid}`) || data.rejectRebase) {
+    process.stderr.write('Rebase refused');
+    process.exit(1);
+  }
+  if (data.rebaseHead) {
+    data.pr.headRefOid = data.rebaseHead;
+    data.pr.mergeStateStatus = 'CLEAN';
+    data.behind = 0;
+    if (data.rebasedChecks) {
+      data.pr.statusCheckRollup = data.rebasedChecks;
+    }
+    writeFileSync(file, JSON.stringify(data));
+  }
+  output({ data: { updatePullRequestBranch: { clientMutationId: null } } });
+} else if (args.includes('graphql')) {
+  if (data.protectionError) {
+    process.exit(1);
+  }
+  output({
+    data: {
+      repository: {
+        ref: {
+          branchProtectionRule: data.classicStrict
+            ? { requiresStatusChecks: true, requiresStrictStatusChecks: true }
+            : null,
+        },
+      },
+    },
+  });
+} else if (args.some((arg) => arg.includes('/rules/branches/'))) {
+  output([
+    data.rulesetStrict
+      ? [
+          {
+            type: 'required_status_checks',
+            parameters: {
+              strict_required_status_checks_policy: true,
+              required_status_checks: [{ context: 'CI' }],
+            },
+          },
+        ]
+      : [],
+  ]);
 } else if (args.some((arg) => arg.includes('/git/ref/heads/'))) {
   output({ object: { sha: data.baseSha } });
 } else if (args.some((arg) => arg.includes('/compare/'))) {

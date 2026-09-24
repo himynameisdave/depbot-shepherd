@@ -28,7 +28,7 @@ on:
         type: string
         default: 'shepherd:skip'
       rebase-wait-minutes:
-        description: Maximum wait for Dependabot to push after a rebase request
+        description: Maximum wait for GitHub to finish a direct rebase
         type: number
         default: 10
       ci-wait-minutes:
@@ -141,6 +141,7 @@ jobs:
         pr: ${{ fromJSON(needs.discover.outputs.prs) }}
     env:
       PR: ${{ matrix.pr }}
+      REBASE_TRIGGERS_WORKFLOWS: ${{ secrets.SHEPHERD_GITHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

@@ -22,7 +22,7 @@ With depbot-shepherd:
 
 1. **Dependabot** opens pull requests (PRs) to update your dependencies.
 2. **Your existing CI** runs tests and other checks on those PRs.
-3. **depbot-shepherd** brings eligible PRs up to date, asks Codex to review them, and merges only when its checks allow it.
+3. **depbot-shepherd** rebases eligible PRs when branch protection requires it, asks Codex to review them, and merges only when its checks allow it.
 4. **You** review anything it skips and can exclude individual PRs whenever you want.
 
 It does not set up Dependabot or your tests for you, and it does not fix failing tests or make application code changes. Codex is the only supported reviewer today; Claude/Anthropic support is planned as a possible future addition.
@@ -98,7 +98,7 @@ What the main sections mean:
 | `on`                 | Chooses when to run. This first example runs only when you click the button.                                           |
 | `permissions`        | Allows the workflow to read PR checks, report results, and later merge updates. Keep these entries even for a dry run. |
 | `jobs.shepherd.uses` | Calls the workflow maintained in this repository.                                                                      |
-| `with`               | Supplies settings. `dry-run: true` prevents comments, rebase requests, and merges.                                     |
+| `with`               | Supplies settings. `dry-run: true` prevents comments, rebases, and merges.                                             |
 | `secrets`            | Passes the API key you saved in step 2 to the reviewer.                                                                |
 
 Unlike an individual Action, a reusable workflow goes directly under a job. You do not wrap this `uses:` line in `steps:`.
@@ -110,7 +110,7 @@ Unlike an individual Action, a reusable workflow goes directly under a job. You 
 3. Select **Run workflow**, choose your default branch, and confirm **Run workflow**.
 4. Open the new run. When it finishes, look at its job summaries. For runs with eligible PRs, open the **report** job for the combined results.
 
-A **dry run** lets you see what would happen without changing any PRs. It can still call Codex and use API credits. PRs that need a rebase are skipped because a dry run cannot request one.
+A **dry run** lets you see what would happen without changing any PRs. It can still call Codex and use API credits. PRs that need a rebase are skipped because a dry run cannot change their branches. PRs that are behind without a strict up-to-date requirement can still be reviewed.
 
 Expect one of these results:
 
@@ -123,7 +123,7 @@ Expect one of these results:
 
 ### 5. Prepare for automatic merging
 
-Before turning off dry-run mode, configure branch protection or a ruleset for your target branch with **required status checks** and **Require branches to be up to date before merging**. These make GitHub enforce your CI requirements at merge time. See [GitHub's branch protection guide](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
+Before turning off dry-run mode, configure branch protection or a ruleset for your target branch with **required status checks**. The workflow honors your choice of **Require branches to be up to date before merging**: when enabled, it rebases outdated PRs directly through GitHub before review; when disabled, being behind alone does not require an update. See [GitHub's branch protection guide](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
 
 The default merge method is **squash**: GitHub combines a PR's changes into one commit. Make sure **Allow squash merging** is enabled under your repository's **Settings → General → Pull Requests**, or choose another `merge-method` below.
 
@@ -245,22 +245,22 @@ This reviews only PR #123 if it is an eligible Dependabot PR targeting `release`
 
 All settings go under `jobs.shepherd.with` in **your** workflow file. You only need to include settings you want to change.
 
-| Input                    | Default               | Purpose                                                                                                                     |
-| ------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `base-branch`            | Caller default branch | Only process PRs targeting this branch.                                                                                     |
-| `dry-run`                | `true`                | No comments, rebase requests, or merges; eligible PRs still incur review usage. Behind/conflicting PRs skip without review. |
-| `pr`                     | Empty                 | Restrict to one open, eligible PR number.                                                                                   |
-| `max-auto-merge`         | `minor`               | `patch`, `minor`, or `major`. Unknown versions always skip.                                                                 |
-| `merge-method`           | `squash`              | `squash`, `merge`, or `rebase`; enable the chosen method in repository settings.                                            |
-| `skip-label`             | `shepherd:skip`       | PR opt-out label; checked again after review.                                                                               |
-| `rebase-wait-minutes`    | `10`                  | Maximum wait for Dependabot's new commit.                                                                                   |
-| `ci-wait-minutes`        | `30`                  | Maximum wait for checks.                                                                                                    |
-| `model`                  | `gpt-6-luna`          | Explicit review model; blank also selects Luna.                                                                             |
-| `reasoning-effort`       | `medium`              | Codex reasoning effort, supported by the chosen model.                                                                      |
-| `force-review`           | `false`               | Ignore a cached skip and pay for a new review. Leave false for routine daily runs.                                          |
-| `codex-version`          | `0.156.1`             | Version of Codex CLI and its API proxy.                                                                                     |
-| `review-timeout-minutes` | `20`                  | Maximum duration of the review action, including setup.                                                                     |
-| `source-ref`             | `main`                | Ref of this repository's implementation; match the workflow reference.                                                      |
+| Input                    | Default               | Purpose                                                                                                                                    |
+| ------------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `base-branch`            | Caller default branch | Only process PRs targeting this branch.                                                                                                    |
+| `dry-run`                | `true`                | No comments, rebases, or merges; eligible PRs still incur review usage. PRs requiring a rebase or conflict resolution skip without review. |
+| `pr`                     | Empty                 | Restrict to one open, eligible PR number.                                                                                                  |
+| `max-auto-merge`         | `minor`               | `patch`, `minor`, or `major`. Unknown versions always skip.                                                                                |
+| `merge-method`           | `squash`              | `squash`, `merge`, or `rebase`; enable the chosen method in repository settings.                                                           |
+| `skip-label`             | `shepherd:skip`       | PR opt-out label; checked again after review.                                                                                              |
+| `rebase-wait-minutes`    | `10`                  | Maximum wait for GitHub's direct rebase to produce a new commit.                                                                           |
+| `ci-wait-minutes`        | `30`                  | Maximum wait for checks.                                                                                                                   |
+| `model`                  | `gpt-6-luna`          | Explicit review model; blank also selects Luna.                                                                                            |
+| `reasoning-effort`       | `medium`              | Codex reasoning effort, supported by the chosen model.                                                                                     |
+| `force-review`           | `false`               | Ignore a cached skip and pay for a new review. Leave false for routine daily runs.                                                         |
+| `codex-version`          | `0.156.1`             | Version of Codex CLI and its API proxy.                                                                                                    |
+| `review-timeout-minutes` | `20`                  | Maximum duration of the review action, including setup.                                                                                    |
+| `source-ref`             | `main`                | Ref of this repository's implementation; match the workflow reference.                                                                     |
 
 Each PR job has a 90-minute overall timeout, including setup, rebase, CI, review, and reporting. Keep configured waits within that budget. Discovery supports up to GitHub's 256-job matrix limit and fails visibly above it; use `pr` to narrow the run.
 
@@ -287,7 +287,7 @@ The ref after `@` selects the workflow definition. `source-ref` selects this rep
 
 ### Triggering other workflows after a merge
 
-You only need an additional GitHub token if you want mutations to trigger other workflows or your setup requires a separate identity. The default `GITHUB_TOKEN` is supplied automatically; you do not create it yourself.
+Use an additional GitHub token for the automatic **rebase → CI → review → merge** path. GitHub Actions normally does not start CI for a branch update made with `GITHUB_TOKEN`. With that default token, the workflow can perform the rebase, but then stops and asks you to run CI on the new head or configure `SHEPHERD_GITHUB_TOKEN`. It never treats the old head’s passing checks as validation of the rebased head. The additional token also lets merges trigger deployment or post-merge workflows. The default `GITHUB_TOKEN` is supplied automatically; you do not create it yourself.
 
 For the optional token, use a GitHub App installation token or a fine-grained personal access token (PAT) scoped to your repository with:
 
@@ -308,7 +308,7 @@ A PAT expires according to its settings and must be replaced when necessary. Git
 
 ### How review and merging are separated
 
-The workflow asks Dependabot to rebase outdated PRs or recreate conflicting ones, then waits for CI on the new commit. It checks out the exact commit and gathers the PR diff, embedded release notes, check results, and best-effort upstream comparisons.
+The workflow checks both classic branch protection and active branch rulesets. If strict up-to-date status checks are required and the PR is behind, it rebases the PR directly using GitHub’s `updatePullRequestBranch` mutation with `updateMethod: REBASE` and the expected head SHA. It does not post commands to Dependabot, recreate branches, or resolve merge conflicts. Conflicts and rejected rebases need human attention. When strict checks are disabled, a behind branch is left alone. Protection lookup errors fail the job rather than silently assuming no protection. After a rebase, only CI on the new head counts. It checks out the exact commit and gathers the PR diff, embedded release notes, check results, and best-effort upstream comparisons.
 
 Codex runs through the official `openai/codex-action` in a read-only sandbox with `drop-sudo` protection and an API proxy. It returns a structured verdict. Separate TypeScript code rechecks the PR and decides whether to ask GitHub to merge.
 
@@ -328,7 +328,7 @@ The model can withhold a merge; it cannot override these checks:
 - PR remains open, non-draft, same-repository, on the configured base, and without the skip label.
 - Head and base remain unchanged after review; the final merge request pins the reviewed head SHA.
 
-Use GitHub's required-check and strict up-to-date rules as the final authority. The merge API can atomically compare the head SHA, but not the base SHA; branch protection closes the final race if the base moves after our last read. Merge queues and required human approvals are not bypassed. Repositories using a merge queue may need a separate integration.
+Use GitHub's required-check and strict up-to-date rules as the final authority. The merge API can atomically compare the head SHA, but not the base SHA; strict up-to-date protection closes the final race if the base moves after our last read. Without that setting, GitHub can merge a branch that is behind; this follows the repository’s policy. Merge queues and required human approvals are not bypassed. Repositories using a merge queue may need a separate integration.
 
 Version classification uses Dependabot's title/body, with repository diffs checked by the reviewer; it is not a package-manager-specific manifest parser. A `0.x` minor increase counts as minor but is called out as potentially breaking in the review prompt. Upstream diffs are best-effort, size-limited, and may be missing. Codex is instructed to skip when the available evidence is insufficient. A review cannot guarantee dependency safety.
 
