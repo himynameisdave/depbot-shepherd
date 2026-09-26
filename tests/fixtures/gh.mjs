@@ -27,46 +27,14 @@ if (args[0] === 'pr' && args[1] === 'view') {
   if (data.rebaseHead) {
     data.pr.headRefOid = data.rebaseHead;
     data.pr.mergeStateStatus = 'CLEAN';
-    data.behind = 0;
     if (data.rebasedChecks) {
       data.pr.statusCheckRollup = data.rebasedChecks;
     }
     writeFileSync(file, JSON.stringify(data));
   }
   output({ data: { updatePullRequestBranch: { clientMutationId: null } } });
-} else if (args.includes('graphql')) {
-  if (data.protectionError) {
-    process.exit(1);
-  }
-  output({
-    data: {
-      repository: {
-        ref: {
-          branchProtectionRule: data.classicStrict
-            ? { requiresStatusChecks: true, requiresStrictStatusChecks: true }
-            : null,
-        },
-      },
-    },
-  });
-} else if (args.some((arg) => arg.includes('/rules/branches/'))) {
-  output([
-    data.rulesetStrict
-      ? [
-          {
-            type: 'required_status_checks',
-            parameters: {
-              strict_required_status_checks_policy: true,
-              required_status_checks: [{ context: 'CI' }],
-            },
-          },
-        ]
-      : [],
-  ]);
 } else if (args.some((arg) => arg.includes('/git/ref/heads/'))) {
   output({ object: { sha: data.baseSha } });
-} else if (args.some((arg) => arg.includes('/compare/'))) {
-  output({ behind_by: data.behind ?? 0 });
 } else if (args.some((arg) => arg.includes('/comments?'))) {
   output(data.comments ?? '');
 } else if (args.includes('PUT') && args.some((arg) => arg.endsWith('/merge'))) {

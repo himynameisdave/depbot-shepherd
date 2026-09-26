@@ -224,69 +224,6 @@ function baseSha(): string {
     .sha;
 }
 
-function behindBase(pr: Readonly<PrView>, base: string): number {
-  return ghJson<{ behind_by: number }>(['api', `repos/${REPO}/compare/${base}...${pr.headRefOid}`])
-    .behind_by;
-}
-
-/** Read classic protection and active rulesets; errors must not silently disable protection. */
-function requiresUpToDate(): boolean {
-  const [owner, name] = REPO.split('/');
-  const response = ghJson<{
-    data: {
-      repository: {
-        ref: {
-          branchProtectionRule: {
-            requiresStrictStatusChecks: boolean;
-            requiresStatusChecks: boolean;
-          } | null;
-        } | null;
-      };
-    };
-  }>([
-    'api',
-    'graphql',
-    '-f',
-    'query=query($owner:String!,$name:String!,$ref:String!){repository(owner:$owner,name:$name){ref(qualifiedName:$ref){branchProtectionRule{requiresStrictStatusChecks requiresStatusChecks}}}}',
-    '-f',
-    `owner=${owner}`,
-    '-f',
-    `name=${name}`,
-    '-f',
-    `ref=refs/heads/${BASE_BRANCH}`,
-  ]);
-  const branch = response.data.repository.ref;
-  if (branch === null) {
-    fail('target branch not found while checking protection');
-  }
-  const classic = branch.branchProtectionRule;
-  if (classic?.requiresStatusChecks && classic.requiresStrictStatusChecks) {
-    return true;
-  }
-  const pages = ghJson<
-    {
-      type: string;
-      parameters?: {
-        strict_required_status_checks_policy?: boolean;
-        required_status_checks?: unknown[];
-      };
-    }[][]
-  >([
-    'api',
-    `repos/${REPO}/rules/branches/${encodeURIComponent(BASE_BRANCH)}?per_page=100`,
-    '--paginate',
-    '--slurp',
-  ]);
-  return pages
-    .flat()
-    .some(
-      (rule) =>
-        rule.type === 'required_status_checks'
-        && rule.parameters?.strict_required_status_checks_policy === true
-        && (rule.parameters.required_status_checks?.length ?? 0) > 0,
-    );
-}
-
 function rebasePr(pr: Readonly<PrView>): void {
   gh([
     'api',
@@ -507,8 +444,9 @@ async function sync(n: number): Promise<void> {
     skip('branch has conflicts; resolve them manually before retrying');
     return;
   }
-  const strict = requiresUpToDate();
-  const needsRebase = strict && behindBase(pr, baseSha()) > 0;
+  // GitHub marks a PR BEHIND when an out-of-date head blocks merging. This
+  // reflects both classic protection and rulesets without admin-only reads.
+  const needsRebase = pr.mergeStateStatus === 'BEHIND';
   if (needsRebase) {
     if (DRY_RUN) {
       skip('would rebase the PR directly because the base requires up-to-date checks (dry run)');
@@ -548,11 +486,7 @@ async function sync(n: number): Promise<void> {
   }
 
   const base = baseSha();
-  if (
-    (strict && behindBase(pr, base) > 0)
-    || pr.mergeable !== 'MERGEABLE'
-    || pr.mergeStateStatus !== 'CLEAN'
-  ) {
+  if (pr.mergeable !== 'MERGEABLE' || pr.mergeStateStatus !== 'CLEAN') {
     skip('branch is behind, blocked, or mergeability is not clean; retry next run');
     return;
   }
@@ -779,11 +713,7 @@ function decide(n: number): void {
     );
     return;
   }
-  if (
-    fresh.headRefOid !== state.pr.headRefOid
-    || baseSha() !== state.baseSha
-    || (requiresUpToDate() && behindBase(fresh, state.baseSha) > 0)
-  ) {
+  if (fresh.headRefOid !== state.pr.headRefOid || baseSha() !== state.baseSha) {
     const reason = 'head or base changed during review — retry next run';
     writeResult(resultFrom(fresh, state.updates, 'skipped', reason, verdict));
     return;

@@ -52,10 +52,6 @@ function fixture() {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: checkout, encoding: 'utf8' }).stdout.trim();
   const data = {
     baseSha: 'base-sha',
-    behind: 0,
-    classicStrict: true,
-    rulesetStrict: false,
-    protectionError: false,
     rejectRebase: false,
     rebasedChecks: null as { name: string; status: string; conclusion: string }[] | null,
     rebaseHead: '',
@@ -144,15 +140,18 @@ describe('workflow CLI against simulated GitHub', () => {
   it('never mutates GitHub in dry run', () => {
     const f = fixture();
     expect(f.run('sync', { DRY_RUN: 'true' }).status).toBe(0);
+    expect(
+      f.calls().some((call) => call.args.includes('graphql') || call.args.some((arg) => arg.includes('/rules/branches/'))),
+    ).toBe(false);
     f.review();
     expect(f.run('decide', { DRY_RUN: 'true' }).status).toBe(0);
     expect(f.result().outcome).toBe('would-merge');
     expect(f.calls().some((call) => call.args.includes('comment') || call.args.includes('PUT'))).toBe(false);
   });
 
-  it('rebases directly when classic protection requires an up-to-date branch', () => {
+  it('rebases directly when GitHub marks the PR behind', () => {
     const f = fixture();
-    f.data.behind = 1;
+    f.data.pr.mergeStateStatus = 'BEHIND';
     f.data.rebaseHead = 'rebased-sha';
     f.save();
     expect(f.run('sync').status).toBe(0);
@@ -163,7 +162,7 @@ describe('workflow CLI against simulated GitHub', () => {
 
   it('does not request a rebase in dry run', () => {
     const f = fixture();
-    f.data.behind = 1;
+    f.data.pr.mergeStateStatus = 'BEHIND';
     f.save();
     expect(f.run('sync', { DRY_RUN: 'true' }).status).toBe(0);
     expect(f.result().reason).toContain('dry run');
@@ -268,7 +267,7 @@ describe('review cost controls', () => {
     (title) => {
       const f = fixture();
       f.data.pr.title = title;
-      f.data.behind = 1;
+      f.data.pr.mergeStateStatus = 'BEHIND';
       f.save();
       expect(f.run('sync').status).toBe(0);
       expect(f.result().reason).toContain('no model review needed');
@@ -331,11 +330,8 @@ describe('review cost controls', () => {
 });
 
 describe('direct rebasing and branch protection', () => {
-  it('allows a merely-behind branch when strict checks are disabled', () => {
+  it('allows a PR whose merge state is clean', () => {
     const f = fixture();
-    f.data.classicStrict = false;
-    f.data.behind = 3;
-    f.save();
     expect(f.run('sync').status).toBe(0);
     f.review();
     expect(f.run('decide', { DRY_RUN: 'true' }).status).toBe(0);
@@ -343,11 +339,9 @@ describe('direct rebasing and branch protection', () => {
     expect(f.calls().some((call) => call.args.some((arg) => arg.includes('updatePullRequestBranch')))).toBe(false);
   });
 
-  it('honors strict status checks from active rulesets and pins the rebase head', () => {
+  it('pins the rebase head for a PR blocked as behind', () => {
     const f = fixture();
-    f.data.classicStrict = false;
-    f.data.rulesetStrict = true;
-    f.data.behind = 1;
+    f.data.pr.mergeStateStatus = 'BEHIND';
     f.data.rebaseHead = 'new-sha';
     f.save();
     expect(f.run('sync').status).toBe(0);
@@ -359,7 +353,7 @@ describe('direct rebasing and branch protection', () => {
 
   it('never submits a direct rebase in dry run', () => {
     const f = fixture();
-    f.data.behind = 1;
+    f.data.pr.mergeStateStatus = 'BEHIND';
     f.save();
     expect(f.run('sync', { DRY_RUN: 'true' }).status).toBe(0);
     expect(f.calls().some((call) => call.args.some((arg) => arg.includes('updatePullRequestBranch')))).toBe(false);
@@ -377,7 +371,7 @@ describe('direct rebasing and branch protection', () => {
 
   it('checks CI on the new head after rebasing', () => {
     const f = fixture();
-    f.data.behind = 1;
+    f.data.pr.mergeStateStatus = 'BEHIND';
     f.data.rebaseHead = 'new-sha';
     f.data.rebasedChecks = [{ name: 'CI', status: 'COMPLETED', conclusion: 'FAILURE' }];
     f.save();
@@ -388,7 +382,7 @@ describe('direct rebasing and branch protection', () => {
 
   it('reports that GITHUB_TOKEN rebases require CI without waiting on suppressed workflows', () => {
     const f = fixture();
-    f.data.behind = 1;
+    f.data.pr.mergeStateStatus = 'BEHIND';
     f.data.rebaseHead = 'new-sha';
     f.save();
     expect(f.run('sync', { REBASE_TRIGGERS_WORKFLOWS: 'false' }).status).toBe(0);
@@ -396,18 +390,27 @@ describe('direct rebasing and branch protection', () => {
     expect(f.result().outcome).toBe('skipped');
   });
 
-  it.each(['protectionError', 'rejectRebase'] as const)('fails closed on %s', (flag) => {
+  it('fails closed when GitHub refuses to rebase', () => {
     const f = fixture();
-    f.data.behind = 1;
-    f.data[flag] = true;
+    f.data.pr.mergeStateStatus = 'BEHIND';
+    f.data.rejectRebase = true;
     f.save();
     expect(f.run('sync').status).toBe(1);
     expect(f.result().outcome).toBe('error');
   });
 
+  it('skips an undetermined merge state without requiring protection access', () => {
+    const f = fixture();
+    f.data.pr.mergeStateStatus = 'UNKNOWN';
+    f.save();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.result().outcome).toBe('skipped');
+    expect(f.calls().some((call) => call.args.includes('graphql'))).toBe(false);
+  });
+
   it('stops if a rebase is accepted but does not produce a new head', () => {
     const f = fixture();
-    f.data.behind = 1;
+    f.data.pr.mergeStateStatus = 'BEHIND';
     f.save();
     expect(f.run('sync').status).toBe(0);
     expect(f.result().reason).toContain('did not produce a rebased head');
@@ -415,12 +418,10 @@ describe('direct rebasing and branch protection', () => {
 
   it('rechecks stricter protection added during review', () => {
     const f = fixture();
-    f.data.classicStrict = false;
-    f.data.behind = 1;
     f.save();
     expect(f.run('sync').status).toBe(0);
     f.review();
-    f.data.classicStrict = true;
+    f.data.pr.mergeStateStatus = 'BEHIND';
     f.save();
     expect(f.run('decide').status).toBe(0);
     expect(f.result().outcome).toBe('skipped');
