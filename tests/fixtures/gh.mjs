@@ -35,34 +35,9 @@ if (args[0] === 'pr' && args[1] === 'view') {
   }
   output({ data: { updatePullRequestBranch: { clientMutationId: null } } });
 } else if (args.includes('graphql')) {
-  if (data.protectionError) {
-    process.exit(1);
-  }
-  output({
-    data: {
-      repository: {
-        ref: {
-          branchProtectionRule: data.classicStrict
-            ? { requiresStatusChecks: true, requiresStrictStatusChecks: true }
-            : null,
-        },
-      },
-    },
-  });
-} else if (args.some((arg) => arg.includes('/rules/branches/'))) {
-  output([
-    data.rulesetStrict
-      ? [
-          {
-            type: 'required_status_checks',
-            parameters: {
-              strict_required_status_checks_policy: true,
-              required_status_checks: [{ context: 'CI' }],
-            },
-          },
-        ]
-      : [],
-  ]);
+  // Model the built-in Actions token: branch-protection settings are inaccessible.
+  process.stderr.write('gh: Resource not accessible by integration');
+  process.exit(1);
 } else if (args.some((arg) => arg.includes('/git/ref/heads/'))) {
   output({ object: { sha: data.baseSha } });
 } else if (args.some((arg) => arg.includes('/compare/'))) {
