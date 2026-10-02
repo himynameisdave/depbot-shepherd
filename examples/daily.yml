@@ -21,6 +21,8 @@ jobs:
       # Scheduled runs merge; manual runs default to dry-run.
       dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
       max-auto-merge: minor
+      # Optional: accept sufficient evidence for routine updates (default: conservative).
+      # review-policy: balanced
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       # Optional: makes merges trigger downstream workflows.
