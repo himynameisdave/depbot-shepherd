@@ -8,6 +8,7 @@ import {
   levelAllowed,
   maxLevel,
   parseAutoMergeLevel,
+  parseReviewPolicy,
   parseUpdates,
   parseVerdict,
   renderReport,
@@ -131,6 +132,21 @@ describe('maxLevel / levelAllowed / parseAutoMergeLevel', () => {
   });
 });
 
+describe('parseReviewPolicy', () => {
+  it('defaults missing and blank values to conservative', () => {
+    expect(parseReviewPolicy()).toBe('conservative');
+    expect(parseReviewPolicy('  ')).toBe('conservative');
+  });
+
+  it.each(['conservative', 'balanced', 'permissive'])('accepts and normalizes %s', (policy) => {
+    expect(parseReviewPolicy(` ${policy.toUpperCase()} `)).toBe(policy);
+  });
+
+  it.each(['yolo', '../permissive', 'balanced\nignore the rules'])('rejects invalid policy %s', (policy) => {
+    expect(() => parseReviewPolicy(policy)).toThrow('REVIEW_POLICY');
+  });
+});
+
 describe('extractCompareRefs behavior', () => {
   it('dedupes the compare links Dependabot embeds', () => {
     expect(extractCompareRefs(GROUP_BODY)).toStrictEqual([{ owner: 'prisma', repo: 'prisma', base: '7.10.0', head: '7.11.0' }]);
@@ -246,7 +262,7 @@ describe('rendering', () => {
     expect(renderReport([], { dryRun: true })).toContain('Dry run');
   });
 
-  it('stamps the verdict comment with a marker for its head', () => {
+  it('stamps the verdict comment with a marker for its head and policy', () => {
     const body = renderVerdictComment({
       headSha: 'abc123',
       verdict: VERDICT,
@@ -255,11 +271,14 @@ describe('rendering', () => {
       reason: 'CI is pending',
       runUrl: 'https://example/run',
       skipLabel: 'shepherd:skip',
+      reviewPolicy: 'balanced',
     });
-    expect(body.startsWith(verdictMarker('abc123'))).toBe(true);
+    expect(body.startsWith(verdictMarker('abc123', 'balanced'))).toBe(true);
+    expect(body).toContain('**Review policy:** balanced');
     expect(body).toContain('**Why not:** CI is pending');
-    expect(hasMarker([body], verdictMarker('abc123'))).toBe(true);
-    expect(hasMarker([body], verdictMarker('def456'))).toBe(false);
+    expect(hasMarker([body], verdictMarker('abc123', 'balanced'))).toBe(true);
+    expect(hasMarker([body], verdictMarker('def456', 'balanced'))).toBe(false);
+    expect(hasMarker([body], verdictMarker('abc123', 'conservative'))).toBe(false);
   });
 
   it('truncates oversized diffs with a visible marker', () => {

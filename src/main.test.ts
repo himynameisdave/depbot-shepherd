@@ -91,6 +91,7 @@ function fixture() {
         BASE_BRANCH: 'main',
         DRY_RUN: 'false',
         MAX_AUTO_MERGE: 'minor',
+        REVIEW_POLICY: 'conservative',
         MERGE_METHOD: 'squash',
         SKIP_LABEL: 'shepherd:skip',
         TARGET_PR: '',
@@ -235,9 +236,10 @@ describe('workflow CLI against simulated GitHub', () => {
 
   it('reports jobs that failed before producing any artifact', () => {
     const f = fixture();
-    const report = f.run('report', { EXPECTED_PRS: '[1]', SHEPHERD_JOB_RESULT: 'failure' });
+    const report = f.run('report', { EXPECTED_PRS: '[1]', SHEPHERD_JOB_RESULT: 'failure', REVIEW_POLICY: 'balanced' });
     expect(report.status).toBe(1);
     expect(report.stdout).toContain('did not produce a result');
+    expect(report.stdout).toContain('| balanced |');
   });
 
   it('deduplicates verdict comments for the same head', () => {
@@ -325,6 +327,92 @@ describe('review cost controls', () => {
     expect(f.run('prepare').status).toBe(0);
     expect(key()).not.toBe(original);
   });
+});
+
+describe('configurable review policies', () => {
+  it.each(['conservative', 'balanced', 'permissive'])('prepares and reports the %s policy', (policy) => {
+    const f = fixture();
+    const env = { REVIEW_POLICY: policy, DRY_RUN: 'true' };
+    expect(f.run('sync', env).status).toBe(0);
+    expect(f.run('prepare', env).status).toBe(0);
+    const prompt = readFileSync(join(f.state, 'pr-1/context/prompt.md'), 'utf8');
+    expect(prompt).toContain(`## Selected review policy: ${policy}`);
+    expect(prompt).toContain(readFileSync(`review/policies/${policy}.md`, 'utf8'));
+    expect(prompt).not.toContain('{{');
+    for (const other of ['conservative', 'balanced', 'permissive'].filter((name) => name !== policy)) {
+      expect(prompt).not.toContain(readFileSync(`review/policies/${other}.md`, 'utf8'));
+    }
+    f.review();
+    expect(f.run('decide', env).status).toBe(0);
+    expect(f.result()).toMatchObject({ outcome: 'would-merge', reviewPolicy: policy });
+    expect(f.run('report', env).stdout).toContain(`| ${policy} |`);
+  });
+
+  it('rejects invalid policy configuration before contacting GitHub', () => {
+    const f = fixture();
+    const run = f.run('discover', { REVIEW_POLICY: 'reckless' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('REVIEW_POLICY must be');
+    expect(f.calls()).toHaveLength(0);
+  });
+
+  it.each(['balanced', 'permissive'])('invalidates conservative cached skips when switching to %s', (policy) => {
+    const f = fixture();
+    expect(f.run('sync').status).toBe(0);
+    expect(f.run('prepare').status).toBe(0);
+    writeFileSync(join(f.state, 'pr-1/verdict.json'), JSON.stringify({ ...verdict, decision: 'skip' }));
+    expect(f.run('decide', { DRY_RUN: 'true' }).status).toBe(0);
+    rmSync(join(f.state, 'pr-1/verdict.json'));
+    const original = readFileSync(join(f.state, 'pr-1/review-key.txt'), 'utf8');
+    expect(f.run('prepare', { REVIEW_POLICY: policy }).status).toBe(0);
+    expect(readFileSync(join(f.state, 'pr-1/review-key.txt'), 'utf8')).not.toBe(original);
+    expect(f.run('reuse', { REVIEW_POLICY: policy }).stdout).toContain('reused=false');
+    expect(existsSync(join(f.state, 'pr-1/verdict.json'))).toBe(false);
+  });
+
+  it('allows a new comment after changing policy on the same head', () => {
+    const f = fixture();
+    expect(f.run('sync').status).toBe(0);
+    f.review();
+    f.data.pr.mergeStateStatus = 'BLOCKED';
+    f.save();
+    expect(f.run('decide').status).toBe(0);
+    expect(f.run('decide', { REVIEW_POLICY: 'balanced' }).status).toBe(0);
+    expect(f.run('decide', { REVIEW_POLICY: 'balanced' }).status).toBe(0);
+    const comments = f.calls().filter((call) => call.args.includes('comment'));
+    expect(comments).toHaveLength(2);
+    expect(comments[1]?.input).toContain('**Review policy:** balanced');
+  });
+
+  it.each(['high-risk', 'low-confidence', 'major', 'ci-failed', 'protection'])(
+    'keeps the %s merge gate under permissive review',
+    (gate) => {
+      const f = fixture();
+      const env = { REVIEW_POLICY: 'permissive' };
+      expect(f.run('sync', env).status).toBe(0);
+      writeFileSync(
+        join(f.state, 'pr-1/verdict.json'),
+        JSON.stringify({
+          ...verdict,
+          risk: gate === 'high-risk' ? 'high' : 'low',
+          confidence: gate === 'low-confidence' ? 'low' : 'high',
+        }),
+      );
+      if (gate === 'ci-failed') {
+        f.data.pr.statusCheckRollup = [{ name: 'CI', status: 'COMPLETED', conclusion: 'FAILURE' }];
+      }
+      if (gate === 'protection') {
+        f.data.pr.mergeStateStatus = 'BLOCKED';
+      }
+      if (gate === 'major') {
+        f.data.pr.title = 'Bump example from 1.0.0 to 2.0.0';
+      }
+      f.save();
+      expect(f.run(gate === 'major' ? 'sync' : 'decide', env).status).toBe(0);
+      expect(f.result().outcome).toBe('skipped');
+      expect(f.calls().some((call) => call.args.includes('PUT'))).toBe(false);
+    },
+  );
 });
 
 describe('direct rebasing and branch protection', () => {

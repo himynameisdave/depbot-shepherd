@@ -13,6 +13,7 @@ type Step = {
 };
 type Workflow = {
   readonly on: Readonly<Record<string, unknown>>;
+  readonly env: Readonly<Record<string, unknown>>;
   readonly jobs: Readonly<
     Record<
       string,
@@ -30,6 +31,12 @@ describe('reusable workflow contract', () => {
     expect(workflow.on.workflow_call).toBeDefined();
     expect(workflow.on.schedule).toBeUndefined();
     expect(workflow.jobs.shepherd?.strategy?.['max-parallel']).toBe(1);
+  });
+
+  it('passes the selected review policy to every CLI stage with a conservative default', () => {
+    const call = workflow.on.workflow_call as { inputs: Record<string, { default: unknown }> };
+    expect(call.inputs['review-policy']?.default).toBe('conservative');
+    expect(workflow.env.REVIEW_POLICY).toBe(`\${{ inputs.review-policy }}`);
   });
 
   it('pins third-party actions and disables persisted checkout credentials', () => {

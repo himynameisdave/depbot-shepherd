@@ -19,6 +19,10 @@ on:
         description: Highest permitted version bump (patch, minor, or major; unknown always skips)
         type: string
         default: minor
+      review-policy:
+        description: Review evidence threshold (conservative, balanced, or permissive); merge safeguards always apply
+        type: string
+        default: conservative
       merge-method:
         description: GitHub merge method (squash, merge, or rebase)
         type: string
@@ -84,6 +88,7 @@ env:
   FORCE_REVIEW: ${{ inputs.force-review }}
   TARGET_PR: ${{ inputs.pr }}
   MAX_AUTO_MERGE: ${{ inputs.max-auto-merge }}
+  REVIEW_POLICY: ${{ inputs.review-policy }}
   MERGE_METHOD: ${{ inputs.merge-method }}
   SKIP_LABEL: ${{ inputs.skip-label }}
   REBASE_WAIT_MINUTES: ${{ inputs.rebase-wait-minutes }}
@@ -180,7 +185,7 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ steps.prepare.outputs.skip-cache }}
-          key: shepherd-skip-v1-${{ github.repository_id }}-${{ matrix.pr }}-${{ steps.prepare.outputs.review-key }}-${{ hashFiles('shepherd/src/*.ts', 'shepherd/review/*', 'shepherd/.github/workflows/shepherd.yml') }}
+          key: shepherd-skip-v1-${{ github.repository_id }}-${{ matrix.pr }}-${{ steps.prepare.outputs.review-key }}-${{ hashFiles('shepherd/src/*.ts', 'shepherd/review/**', 'shepherd/.github/workflows/shepherd.yml') }}
       - name: Validate cached skip verdict
         if: steps.sync.outputs.status == 'ready'
         id: reuse
@@ -215,7 +220,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ steps.prepare.outputs.skip-cache }}
-          key: shepherd-skip-v1-${{ github.repository_id }}-${{ matrix.pr }}-${{ steps.prepare.outputs.review-key }}-${{ hashFiles('shepherd/src/*.ts', 'shepherd/review/*', 'shepherd/.github/workflows/shepherd.yml') }}
+          key: shepherd-skip-v1-${{ github.repository_id }}-${{ matrix.pr }}-${{ steps.prepare.outputs.review-key }}-${{ hashFiles('shepherd/src/*.ts', 'shepherd/review/**', 'shepherd/.github/workflows/shepherd.yml') }}
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
