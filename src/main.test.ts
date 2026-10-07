@@ -384,6 +384,20 @@ describe('configurable review policies', () => {
     expect(comments[1]?.input).toContain('**Review policy:** balanced');
   });
 
+  it.each([
+    ['conservative', 0],
+    ['balanced', 1],
+  ] as const)('treats pre-policy verdict comments as %s', (policy, expected) => {
+    const f = fixture();
+    expect(f.run('sync').status).toBe(0);
+    f.review();
+    f.data.pr.mergeStateStatus = 'BLOCKED';
+    f.data.comments = `<!-- dependabot-shepherd:verdict sha=${f.data.pr.headRefOid} -->`;
+    f.save();
+    expect(f.run('decide', { REVIEW_POLICY: policy }).status).toBe(0);
+    expect(f.calls().filter((call) => call.args.includes('comment'))).toHaveLength(expected);
+  });
+
   it.each(['high-risk', 'low-confidence', 'major', 'ci-failed', 'protection'])(
     'keeps the %s merge gate under permissive review',
     (gate) => {

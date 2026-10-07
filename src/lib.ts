@@ -479,6 +479,15 @@ export function verdictMarker(headSha: string, reviewPolicy: ReviewPolicy): stri
   return `<!-- dependabot-shepherd:verdict sha=${headSha} policy=${reviewPolicy} -->`;
 }
 
+/** Markers showing a head was already commented under a policy; pre-policy comments were conservative. */
+export function verdictMarkers(headSha: string, reviewPolicy: ReviewPolicy): string[] {
+  const markers = [verdictMarker(headSha, reviewPolicy)];
+  if (reviewPolicy === 'conservative') {
+    markers.push(`<!-- dependabot-shepherd:verdict sha=${headSha} -->`);
+  }
+  return markers;
+}
+
 /** True when any comment body already carries the marker (so we don't spam on every daily run). */
 export function hasMarker(commentBodies: readonly string[], marker: string): boolean {
   return commentBodies.some((body) => body.includes(marker));

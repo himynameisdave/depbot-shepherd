@@ -23,7 +23,7 @@ import {
   renderVerdictComment,
   summarizeChecks,
   truncateText,
-  verdictMarker,
+  verdictMarkers,
   type AutoMergeLevel,
   type ChecksSummary,
   type CompareRef,
@@ -740,8 +740,8 @@ function decide(n: number): void {
   log(`policy: ${policy.merge ? 'MERGE' : 'SKIP'} — ${policy.reason}`);
 
   if (!DRY_RUN) {
-    const marker = verdictMarker(fresh.headRefOid, REVIEW_POLICY);
-    if (hasMarker([commentBodies(n)], marker)) {
+    const bodies = commentBodies(n);
+    if (verdictMarkers(fresh.headRefOid, REVIEW_POLICY).some((marker) => hasMarker([bodies], marker))) {
       log('verdict for this head and review policy already commented');
     } else {
       postComment(
