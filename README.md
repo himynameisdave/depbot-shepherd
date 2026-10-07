@@ -207,6 +207,28 @@ Only negative decisions are reused: a cached verdict can **never authorize a mer
 
 Model choice and shorter reviews reduce costs but are not dollar or token caps. `review-timeout-minutes` limits elapsed time, not spend. Test a cheaper model on a small dry run to assess its judgments before enabling automatic merges. See [current OpenAI API prices](https://developers.openai.com/api/docs/pricing).
 
+### Can I make reviews more permissive?
+
+Set `review-policy` under `jobs.shepherd.with` in your caller workflow:
+
+```yaml
+with:
+  max-auto-merge: minor
+  review-policy: balanced
+```
+
+| Review policy            | Evidence needed for a merge                                                                                                                                            |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conservative` (default) | Unchanged from earlier releases. Merges only when the review finds nothing affecting your usage and no open questions; when in doubt, it skips.                        |
+| `balanced`               | Release notes or upstream changes, repository usage, and relevant CI provide sufficient evidence. A missing full upstream diff alone is not a blocker.                 |
+| `permissive`             | Routine stable patch/minor updates may merge with sparse release notes when the dependency diff is focused and passing tests meaningfully exercise the affected usage. |
+
+Start with **`balanced`** for routine maintenance. Use **`permissive`** when your tests exercise the dependencies being updated and you accept more uncertainty about upstream changes. These policies guide the model's judgment; they are not numerical risk scores or guarantees.
+
+Every policy skips concrete incompatibilities, unmet runtime/peer requirements, applicable manual migrations, and credible security concerns. A dependency's own agent/contributor documentation (its `AGENTS.md`, `SKILL.md`, and similar) is reviewed as upstream data and is not a blocker merely because it contains instructions; your repository's own guidance can still flag manual upgrade steps. Major and pre-1.0 minor updates still need explicit compatibility evidence.
+
+`max-auto-merge` independently limits the version bumps allowed. All policies retain CI, branch protection, current-head validation, high-risk and low-confidence blocks, and the `shepherd:skip` opt-out. Changing policy invalidates cached skips and allows a new review comment on the same head. The selected policy appears in comments, summaries, and JSON results. An omitted or blank policy uses `conservative`; invalid values fail before contacting GitHub.
+
 ### Why did it skip my PR?
 
 Read the summary for the specific reason. Common causes are failing or pending checks, a branch that needs updating, a required human approval, a major version update, or a review that could not establish enough confidence.
@@ -251,6 +273,7 @@ All settings go under `jobs.shepherd.with` in **your** workflow file. You only n
 | `dry-run`                | `true`                | No comments, rebases, or merges; eligible PRs still incur review usage. PRs requiring a rebase or conflict resolution skip without review. |
 | `pr`                     | Empty                 | Restrict to one open, eligible PR number.                                                                                                  |
 | `max-auto-merge`         | `minor`               | `patch`, `minor`, or `major`. Unknown versions always skip.                                                                                |
+| `review-policy`          | `conservative`        | Evidence threshold: `conservative`, `balanced`, or `permissive`. All merge safeguards still apply.                                         |
 | `merge-method`           | `squash`              | `squash`, `merge`, or `rebase`; enable the chosen method in repository settings.                                                           |
 | `skip-label`             | `shepherd:skip`       | PR opt-out label; checked again after review.                                                                                              |
 | `rebase-wait-minutes`    | `10`                  | Maximum wait for GitHub's direct rebase to produce a new commit.                                                                           |
@@ -314,7 +337,7 @@ Codex runs through the official `openai/codex-action` in a read-only sandbox wit
 
 The API key is passed only to the Codex Action. GitHub tokens are passed only to the orchestration steps. PR checkouts do not persist credentials, and those orchestration steps do not install or execute your repository's scripts.
 
-Eligible PRs are queued by oldest PR number and processed at most one at a time. GitHub controls matrix scheduling, so exact execution order is not guaranteed. Review comments are posted once per head commit; skips before review appear in the summary. Results are also saved as downloadable JSON artifacts for seven days.
+Eligible PRs are queued by oldest PR number and processed at most one at a time. GitHub controls matrix scheduling, so exact execution order is not guaranteed. Review comments are posted once per head commit and review policy; skips before review appear in the summary. Results are also saved as downloadable JSON artifacts for seven days.
 
 ### Detailed merge policy
 

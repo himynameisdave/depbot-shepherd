@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import {
@@ -15,6 +15,7 @@ import {
   maxLevel,
   levelAllowed,
   parseAutoMergeLevel,
+  parseReviewPolicy,
   parseUpdates,
   parseVerdict,
   renderReport,
@@ -22,7 +23,7 @@ import {
   renderVerdictComment,
   summarizeChecks,
   truncateText,
-  verdictMarker,
+  verdictMarkers,
   type AutoMergeLevel,
   type ChecksSummary,
   type CompareRef,
@@ -65,6 +66,7 @@ const PROMPT_FILE = resolve(envStr('PROMPT_FILE', 'review/prompt.md'));
 const DRY_RUN = ['1', 'true', 'yes'].includes(envStr('DRY_RUN', 'false').toLowerCase());
 const SKIP_LABEL = envStr('SKIP_LABEL', 'shepherd:skip');
 const CEILING: AutoMergeLevel = parseAutoMergeLevel(env.MAX_AUTO_MERGE);
+const REVIEW_POLICY = parseReviewPolicy(env.REVIEW_POLICY);
 const MERGE_METHOD = envStr('MERGE_METHOD', 'squash');
 if (!['squash', 'merge', 'rebase'].includes(MERGE_METHOD)) {
   throw new Error('MERGE_METHOD must be squash, merge, or rebase');
@@ -300,6 +302,7 @@ function resultFrom(
     reason,
     headSha: pr.headRefOid,
     verdict,
+    reviewPolicy: REVIEW_POLICY,
   };
 }
 
@@ -600,6 +603,7 @@ function prepare(n: number): void {
   }
 
   const template = readFileSync(PROMPT_FILE, 'utf8');
+  const policyFile = join(dirname(PROMPT_FILE), 'policies', `${REVIEW_POLICY}.md`);
   const prompt = renderTemplate(template, {
     REPO,
     PR_NUMBER: String(pr.number),
@@ -611,6 +615,8 @@ function prepare(n: number): void {
     UPDATES: formatUpdates(updates),
     BUMP_LEVEL: level,
     MAX_AUTO_MERGE: CEILING,
+    REVIEW_POLICY,
+    REVIEW_POLICY_RULES: readFileSync(policyFile, 'utf8'),
   });
   writeFileSync(join(dir, 'prompt.md'), prompt);
   const model = envStr('REVIEW_MODEL', 'gpt-6-luna');
@@ -620,6 +626,7 @@ function prepare(n: number): void {
       repo: REPO,
       state,
       ceiling: CEILING,
+      reviewPolicy: REVIEW_POLICY,
       model,
       effort,
       codexVersion: envStr('REVIEW_CODEX_VERSION', '0.156.1'),
@@ -636,8 +643,8 @@ function prepare(n: number): void {
   writeFileSync(join(prDir(n), 'review-key.txt'), reviewKey);
   setOutput('review-key', reviewKey);
   setOutput('skip-cache', join(prDir(n), 'skip-cache.json'));
-  log(`Review configuration: model=${model}, reasoning=${effort}`);
-  appendSummary(`- PR #${n} reviewer: **${model}**, reasoning **${effort}**\n`);
+  log(`Review configuration: model=${model}, reasoning=${effort}, policy=${REVIEW_POLICY}`);
+  appendSummary(`- PR #${n} reviewer: **${model}**, reasoning **${effort}**, policy **${REVIEW_POLICY}**\n`);
   setOutput('prompt', join(dir, 'prompt.md'));
   setOutput('verdict', join(prDir(n), 'verdict.json'));
   log(`review packet written to ${dir}`);
@@ -733,9 +740,9 @@ function decide(n: number): void {
   log(`policy: ${policy.merge ? 'MERGE' : 'SKIP'} — ${policy.reason}`);
 
   if (!DRY_RUN) {
-    const marker = verdictMarker(fresh.headRefOid);
-    if (hasMarker([commentBodies(n)], marker)) {
-      log('verdict for this head already commented');
+    const bodies = commentBodies(n);
+    if (verdictMarkers(fresh.headRefOid, REVIEW_POLICY).some((marker) => hasMarker([bodies], marker))) {
+      log('verdict for this head and review policy already commented');
     } else {
       postComment(
         n,
@@ -747,6 +754,7 @@ function decide(n: number): void {
           reason: policy.reason,
           runUrl: RUN_URL,
           skipLabel: SKIP_LABEL,
+          reviewPolicy: REVIEW_POLICY,
         }),
       );
     }
@@ -800,6 +808,7 @@ function report(): void {
         updates: [],
         outcome: 'error',
         reason: 'PR job did not produce a result (failed or cancelled)',
+        reviewPolicy: REVIEW_POLICY,
       });
     }
   }
@@ -872,7 +881,12 @@ try {
           outcome: 'error',
           reason: '',
         };
-    writeJson(existing, { ...partial, outcome: 'error', reason: `${command}: ${message}` });
+    writeJson(existing, {
+      ...partial,
+      reviewPolicy: REVIEW_POLICY,
+      outcome: 'error',
+      reason: `${command}: ${message}`,
+    });
     setOutput('status', 'error');
   }
   process.exit(1);

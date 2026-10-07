@@ -5,6 +5,7 @@
 
 export type SemverLevel = 'patch' | 'minor' | 'major' | 'unknown';
 export type AutoMergeLevel = 'patch' | 'minor' | 'major';
+export type ReviewPolicy = 'conservative' | 'balanced' | 'permissive';
 
 export type Update = {
   readonly name: string;
@@ -54,6 +55,7 @@ export type Result = {
   readonly reason: string;
   readonly headSha?: string;
   readonly verdict?: Verdict | null;
+  readonly reviewPolicy?: ReviewPolicy;
 };
 
 export type CompareRef = {
@@ -122,6 +124,17 @@ export function parseAutoMergeLevel(raw?: string): AutoMergeLevel {
     return 'minor';
   }
   throw new Error('MAX_AUTO_MERGE must be patch, minor, or major');
+}
+
+export function parseReviewPolicy(raw?: string): ReviewPolicy {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (value === '') {
+    return 'conservative';
+  }
+  if (value === 'conservative' || value === 'balanced' || value === 'permissive') {
+    return value;
+  }
+  throw new Error('REVIEW_POLICY must be conservative, balanced, or permissive');
 }
 
 // Dependabot prose: "Bumps [lodash](url) from 4.17.20 to 4.17.21." (single dependency),
@@ -388,10 +401,15 @@ export function renderReport(results: readonly Result[], opts: Readonly<{ dryRun
     counts.set(r.outcome, (counts.get(r.outcome) ?? 0) + 1);
   }
   const summary = [...counts.entries()].map(([k, v]) => `${OUTCOME_ICON[k]}: ${v}`).join(' · ');
-  lines.push(summary, '', '| PR | Title | Bump | Outcome | Why |', '| --- | --- | --- | --- | --- |');
+  lines.push(
+    summary,
+    '',
+    '| PR | Title | Bump | Review policy | Outcome | Why |',
+    '| --- | --- | --- | --- | --- | --- |',
+  );
   for (const r of [...results].toSorted((a, b) => a.pr - b.pr)) {
     lines.push(
-      `| [#${r.pr}](${r.url}) | ${cell(r.title)} | ${r.level} | ${OUTCOME_ICON[r.outcome]}`
+      `| [#${r.pr}](${r.url}) | ${cell(r.title)} | ${r.level} | ${r.reviewPolicy ?? 'conservative'} | ${OUTCOME_ICON[r.outcome]}`
         + ` | ${cell(r.reason)} |`,
     );
   }
@@ -408,7 +426,7 @@ export function renderReport(results: readonly Result[], opts: Readonly<{ dryRun
   return `${lines.join('\n')}\n`;
 }
 
-/** The PR comment left with Codex's review, carrying a marker so the same head isn't re-commented. */
+/** The PR comment left with Codex's review, deduplicated by head and review policy. */
 export function renderVerdictComment(
   input: Readonly<{
     headSha: string;
@@ -418,15 +436,18 @@ export function renderVerdictComment(
     reason: string;
     runUrl: string;
     skipLabel: string;
+    reviewPolicy: ReviewPolicy;
   }>,
 ): string {
-  const { headSha, verdict, level, willMerge, reason, runUrl, skipLabel } = input;
+  const { headSha, verdict, level, willMerge, reason, runUrl, skipLabel, reviewPolicy } = input;
   const lines = [
-    verdictMarker(headSha),
+    verdictMarker(headSha, reviewPolicy),
     `### 🐑 Dependabot shepherd — ${willMerge ? 'merging' : 'not merging'}`,
     '',
     `**Bump:** ${level} · **Codex verdict:** ${verdict.decision} · **Risk:** ${verdict.risk}`
       + ` · **Confidence:** ${verdict.confidence}`,
+    '',
+    `**Review policy:** ${reviewPolicy}`,
     '',
     verdict.summary,
   ];
@@ -454,8 +475,17 @@ export function renderVerdictComment(
   return `${lines.join('\n')}\n`;
 }
 
-export function verdictMarker(headSha: string): string {
-  return `<!-- dependabot-shepherd:verdict sha=${headSha} -->`;
+export function verdictMarker(headSha: string, reviewPolicy: ReviewPolicy): string {
+  return `<!-- dependabot-shepherd:verdict sha=${headSha} policy=${reviewPolicy} -->`;
+}
+
+/** Markers showing a head was already commented under a policy; pre-policy comments were conservative. */
+export function verdictMarkers(headSha: string, reviewPolicy: ReviewPolicy): string[] {
+  const markers = [verdictMarker(headSha, reviewPolicy)];
+  if (reviewPolicy === 'conservative') {
+    markers.push(`<!-- dependabot-shepherd:verdict sha=${headSha} -->`);
+  }
+  return markers;
 }
 
 /** True when any comment body already carries the marker (so we don't spam on every daily run). */
