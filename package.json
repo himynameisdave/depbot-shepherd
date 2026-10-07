@@ -15,7 +15,7 @@
   },
   "devDependencies": {
     "@himynameisdave/oxfmt-config": "1.0.0",
-    "@himynameisdave/oxlint-config": "1.2.0",
+    "@himynameisdave/oxlint-config": "2.1.0",
     "@types/bun": "1.4.2",
     "@types/node": "22.20.4",
     "oxfmt": "0.70.0",
