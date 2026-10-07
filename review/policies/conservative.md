@@ -1,8 +1,6 @@
-- Require detailed upstream evidence and repository inspection establishing compatibility of
-  the changed behaviour with this repository's usage. Passing CI supports that assessment.
-- For a non-patch bump, skip if release notes or equivalent upstream evidence are missing or
-  too thin to assess compatibility. Skip for unresolved compatibility questions relevant to
-  the repository, even when tests pass; explain the specific question.
-- Merge when relevant changes have been checked, the dependency diff is understood, and no
-  material compatibility or security questions remain. Unrelated documentation changes and
-  theoretical risks alone are not blockers.
+- `merge` only when you verified nothing in the changes affects how this repository uses the
+  package(s), the lockfile diff is clean, and you have no open questions. Say what you checked.
+- `skip` when a breaking or behavioural change touches code this repository uses, when the release
+  notes are missing or too thin to judge a non-patch bump, or when anything looks suspicious.
+  Passing CI does not settle an open compatibility question.
+- When in doubt, skip — a human will look at it; a bad merge costs more than a day's delay.

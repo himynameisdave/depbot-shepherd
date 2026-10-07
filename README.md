@@ -219,13 +219,13 @@ with:
 
 | Review policy            | Evidence needed for a merge                                                                                                                                            |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `conservative` (default) | Detailed upstream evidence and repository inspection establish compatibility. Relevant unresolved compatibility questions require human review.                        |
+| `conservative` (default) | Unchanged from earlier releases. Merges only when the review finds nothing affecting your usage and no open questions; when in doubt, it skips.                        |
 | `balanced`               | Release notes or upstream changes, repository usage, and relevant CI provide sufficient evidence. A missing full upstream diff alone is not a blocker.                 |
 | `permissive`             | Routine stable patch/minor updates may merge with sparse release notes when the dependency diff is focused and passing tests meaningfully exercise the affected usage. |
 
 Start with **`balanced`** for routine maintenance. Use **`permissive`** when your tests exercise the dependencies being updated and you accept more uncertainty about upstream changes. These policies guide the model's judgment; they are not numerical risk scores or guarantees.
 
-Every policy skips concrete incompatibilities, unmet runtime/peer requirements, applicable manual migrations, and credible security concerns. Ordinary upstream agent/contributor documentation is reviewed as data and is not a blocker merely because it contains instructions. Major and pre-1.0 minor updates still need explicit compatibility evidence.
+Every policy skips concrete incompatibilities, unmet runtime/peer requirements, applicable manual migrations, and credible security concerns. A dependency's own agent/contributor documentation (its `AGENTS.md`, `SKILL.md`, and similar) is reviewed as upstream data and is not a blocker merely because it contains instructions; your repository's own guidance can still flag manual upgrade steps. Major and pre-1.0 minor updates still need explicit compatibility evidence.
 
 `max-auto-merge` independently limits the version bumps allowed. All policies retain CI, branch protection, current-head validation, high-risk and low-confidence blocks, and the `shepherd:skip` opt-out. Changing policy invalidates cached skips and allows a new review comment on the same head. The selected policy appears in comments, summaries, and JSON results. An omitted or blank policy uses `conservative`; invalid values fail before contacting GitHub.
 

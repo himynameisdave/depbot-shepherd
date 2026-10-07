@@ -3,6 +3,8 @@
 - Sparse release notes or incomplete upstream diffs may be accepted for those routine updates
   if repository inspection establishes that passing tests meaningfully exercise the affected
   dependency usage. Explain the evidence relied on and the remaining uncertainty in findings.
+- Compatible bug fixes and additive features may change behaviour without requiring a skip.
+  Distinguish known breakage from hypothetical risk; do not demand proof of zero risk.
 - Development-only status and semver are supporting signals, never sufficient evidence alone.
   Lint-only CI cannot substitute for coverage of runtime or test-tool behaviour.
 - Major and pre-1.0 minor updates still require explicit compatibility evidence. Skip for

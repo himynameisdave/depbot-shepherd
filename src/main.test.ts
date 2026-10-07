@@ -348,6 +348,19 @@ describe('configurable review policies', () => {
     expect(f.run('report', env).stdout).toContain(`| ${policy} |`);
   });
 
+  it.each([
+    ['conservative', true],
+    ['balanced', false],
+    ['permissive', false],
+  ] as const)('keeps the pre-policy doubt rule only under %s', (policy, strict) => {
+    const f = fixture();
+    expect(f.run('sync', { REVIEW_POLICY: policy }).status).toBe(0);
+    expect(f.run('prepare', { REVIEW_POLICY: policy }).status).toBe(0);
+    const prompt = readFileSync(join(f.state, 'pr-1/context/prompt.md'), 'utf8');
+    expect(prompt.includes('When in doubt, skip')).toBe(strict);
+    expect(prompt.includes('do not demand proof of zero risk')).toBe(!strict);
+  });
+
   it('rejects invalid policy configuration before contacting GitHub', () => {
     const f = fixture();
     const run = f.run('discover', { REVIEW_POLICY: 'reckless' });
