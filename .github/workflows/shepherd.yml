@@ -223,7 +223,7 @@ jobs:
           key: shepherd-skip-v1-${{ github.repository_id }}-${{ matrix.pr }}-${{ steps.prepare.outputs.review-key }}-${{ hashFiles('shepherd/src/*.ts', 'shepherd/review/**', 'shepherd/.github/workflows/shepherd.yml') }}
       - name: Upload result
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: shepherd-result-${{ matrix.pr }}-${{ github.run_attempt }}
           path: ${{ github.workspace }}/shepherd-state/results/
