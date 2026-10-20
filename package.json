@@ -14,7 +14,7 @@
     "validate": "bun run check && bun run lint && bun run format:check && bun test"
   },
   "devDependencies": {
-    "@himynameisdave/oxfmt-config": "1.0.0",
+    "@himynameisdave/oxfmt-config": "1.1.0",
     "@himynameisdave/oxlint-config": "2.2.0",
     "@types/bun": "1.4.2",
     "@types/node": "22.20.4",

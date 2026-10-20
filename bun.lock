@@ -5,7 +5,7 @@
     "": {
       "name": "depbot-shepherd",
       "devDependencies": {
-        "@himynameisdave/oxfmt-config": "1.0.0",
+        "@himynameisdave/oxfmt-config": "1.1.0",
         "@himynameisdave/oxlint-config": "2.2.0",
         "@types/bun": "1.4.2",
         "@types/node": "22.20.4",
@@ -18,7 +18,7 @@
     },
   },
   "packages": {
-    "@himynameisdave/oxfmt-config": ["@himynameisdave/oxfmt-config@1.0.0", "", { "peerDependencies": { "oxfmt": ">=0.65.0 <1" } }, "sha512-xHhR+QEJwZ8GZ4u+tSimQBXO5syiv90fw0y0WTFuIcLTNOrmEfCc3ZOdvUdw6nu9sEbTZ60J4bDp/G56RQ087Q=="],
+    "@himynameisdave/oxfmt-config": ["@himynameisdave/oxfmt-config@1.1.0", "", { "peerDependencies": { "oxfmt": ">=0.74.0 <1" } }, "sha512-RlT2gTZQtHt+5A3Yk0ogoIDfWo9/VtttIzhGyZRDscJAmzTMPyzpZCDA6xxThldYF7j8tUdCNGru5kK3vfjhjg=="],
 
     "@himynameisdave/oxlint-config": ["@himynameisdave/oxlint-config@2.2.0", "", { "dependencies": { "eslint-plugin-bunisms": "0.10.0" }, "peerDependencies": { "oxlint": ">=1.88.0 <2", "oxlint-tsgolint": ">=7.0.2003" }, "optionalPeers": ["oxlint-tsgolint"] }, "sha512-PXt91UM6lf+VWln9jvR/ZZeUguuDbEAeFvrI+T8gczSxz+hTyw8yT5IaxbOqljw/0kPIPZLIMG7knkBK/lyjSg=="],
 
