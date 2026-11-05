@@ -17,7 +17,7 @@
     "@himynameisdave/oxfmt-config": "1.1.0",
     "@himynameisdave/oxlint-config": "2.2.0",
     "@types/bun": "1.4.4",
-    "@types/node": "26.6.5",
+    "@types/node": "26.6.6",
     "oxfmt": "0.74.0",
     "oxlint": "1.89.0",
     "oxlint-tsgolint": "7.0.2005",
